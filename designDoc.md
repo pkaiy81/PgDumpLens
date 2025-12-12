@@ -433,9 +433,9 @@ Testing is critical for ensuring the reliability, safety, and correctness of the
 tests:
   - backend-unit: cargo test --workspace
   - backend-integration: cargo test --features integration
-  - frontend-unit: npm run test
-  - frontend-e2e: npx playwright test
-  - coverage-report: cargo llvm-cov, vitest --coverage
+  - frontend-unit: yarn test
+  - frontend-e2e: yarn test:e2e
+  - coverage-report: cargo llvm-cov, yarn test:coverage
 ```
 
 ### Test Data Management

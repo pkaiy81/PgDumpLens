@@ -13,8 +13,19 @@ Cargo.lock
 /frontend/out/
 /frontend/.pnp
 /frontend/.pnp.js
+/frontend/.pnp.cjs
+/frontend/.pnp.loader.mjs
 /frontend/coverage/
 /frontend/.env*.local
+
+# Yarn
+/frontend/.yarn/*
+!/frontend/.yarn/patches
+!/frontend/.yarn/plugins
+!/frontend/.yarn/releases
+!/frontend/.yarn/sdks
+!/frontend/.yarn/versions
+/frontend/yarn-error.log
 
 # ====================
 # Environment & Secrets

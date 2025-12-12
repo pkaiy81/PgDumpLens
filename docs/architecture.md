@@ -338,11 +338,12 @@ cargo test --workspace
 ```
 
 ### Frontend
+
 ```bash
 cd frontend
-npm install
-npm run dev
-npm run test
+yarn install
+yarn dev
+yarn test
 ```
 
 ### Kubernetes
