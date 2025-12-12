@@ -12,7 +12,7 @@ impl SqlGenerator {
         value_placeholder: &str,
         limit: usize,
     ) -> String {
-        let source_cols = fk.source_columns.join(", ");
+        let _source_cols = fk.source_columns.join(", ");
         
         format!(
             r#"-- Rows in {}.{} that reference this value

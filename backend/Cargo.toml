@@ -49,3 +49,6 @@ dotenvy = "0.15"
 mockall = "0.12"
 wiremock = "0.5"
 testcontainers = "0.15"
+
+# Pin versions to avoid edition2024 issues (Rust 1.82 compatibility)
+base64ct = "1.6.0"

@@ -6,6 +6,7 @@ use axum::{
 };
 use serde::Serialize;
 use sqlx::Row;
+use sqlx::types::Json as SqlxJson;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -66,7 +67,10 @@ async fn fetch_schema_graph(state: &AppState, dump_id: Uuid) -> ApiResult<Schema
         .await?;
 
     match row {
-        Some(row) => Ok(row.get("schema_graph")),
+        Some(row) => {
+            let SqlxJson(schema_graph): SqlxJson<SchemaGraph> = row.get("schema_graph");
+            Ok(schema_graph)
+        }
         None => Err(ApiError::NotFound(format!(
             "Schema not found for dump {}",
             dump_id

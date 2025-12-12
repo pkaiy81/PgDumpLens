@@ -6,7 +6,7 @@ mod config;
 mod jobs;
 
 use std::time::Duration;
-use tracing::{info, warn, error};
+use tracing::{info, error};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use sqlx::postgres::PgPool;
 

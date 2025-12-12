@@ -6,6 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use sqlx::types::Json as SqlxJson;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -37,7 +38,7 @@ pub async fn explain_relation(
     Path(id): Path<Uuid>,
     Json(req): Json<ExplainRelationRequest>,
 ) -> ApiResult<Json<ExplainRelationResponse>> {
-    let max_hops = req.max_hops.unwrap_or(2).min(5);
+    let _max_hops = req.max_hops.unwrap_or(2).min(5);
 
     // Fetch schema graph
     let schema_row = sqlx::query("SELECT schema_graph FROM dump_schemas WHERE dump_id = $1")
@@ -46,7 +47,10 @@ pub async fn explain_relation(
         .await?;
 
     let schema_graph: SchemaGraph = match schema_row {
-        Some(row) => row.get("schema_graph"),
+        Some(row) => {
+            let SqlxJson(graph): SqlxJson<SchemaGraph> = row.get("schema_graph");
+            graph
+        }
         None => return Err(ApiError::NotFound(format!(
             "Schema not found for dump {}",
             id

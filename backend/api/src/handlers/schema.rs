@@ -6,6 +6,7 @@ use axum::{
 };
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
+use sqlx::types::Json as SqlxJson;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -39,7 +40,7 @@ pub async fn get_schema(
 
     match row {
         Some(row) => {
-            let schema_graph: SchemaGraph = row.get("schema_graph");
+            let SqlxJson(schema_graph): SqlxJson<SchemaGraph> = row.get("schema_graph");
             let mermaid_er = generate_mermaid_er(&schema_graph);
 
             Ok(Json(SchemaResponse {
@@ -226,7 +227,7 @@ pub async fn suggest_values(
         .map_err(|e| ApiError::Internal(format!("Failed to connect to sandbox: {}", e)))?;
 
     // Build suggestion query
-    let suggest_query = if let Some(ref prefix) = query.prefix {
+    let suggest_query = if let Some(ref _prefix) = query.prefix {
         format!(
             r#"
             SELECT "{}" as value, COUNT(*) as frequency
