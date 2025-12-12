@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  # Metadata Database - stores dump info, schema cache, job queue
+  metadata-db:
+    image: postgres:16-alpine
+    container_name: db-viewer-metadata
+    environment:
+      POSTGRES_USER: dbviewer
+      POSTGRES_PASSWORD: dbviewer_dev
+      POSTGRES_DB: dbviewer_metadata
+    ports:
+      - "5432:5432"
+    volumes:
+      - metadata-data:/var/lib/postgresql/data
+      - ./backend/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dbviewer -d dbviewer_metadata"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Sandbox Database - restored dump databases are created here
+  sandbox-db:
+    image: postgres:16-alpine
+    container_name: db-viewer-sandbox
+    environment:
+      POSTGRES_USER: sandbox
+      POSTGRES_PASSWORD: sandbox_dev
+      POSTGRES_DB: sandbox_template
+    ports:
+      - "5433:5432"
+    volumes:
+      - sandbox-data:/var/lib/postgresql/data
+      - ./dumps:/dumps
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sandbox -d sandbox_template"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  metadata-data:
+  sandbox-data:
