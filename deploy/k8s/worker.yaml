@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+  namespace: db-viewer
+  labels:
+    app: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      containers:
+        - name: worker
+          image: db-viewer/worker:latest
+          imagePullPolicy: Always
+          envFrom:
+            - configMapRef:
+                name: db-viewer-config
+            - secretRef:
+                name: db-viewer-secrets
+          volumeMounts:
+            - name: uploads
+              mountPath: /data/uploads
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "200m"
+            limits:
+              memory: "2Gi"
+              cpu: "1000m"
+      volumes:
+        - name: uploads
+          persistentVolumeClaim:
+            claimName: uploads-pvc

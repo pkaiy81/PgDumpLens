@@ -1,0 +1,35 @@
+//! API handlers
+
+pub mod dumps;
+pub mod relation;
+pub mod risk;
+pub mod schema;
+
+use axum::Json;
+use serde::Serialize;
+
+/// Health check response
+#[derive(Serialize)]
+pub struct HealthResponse {
+    pub status: String,
+    pub version: String,
+}
+
+/// Health check endpoint
+pub async fn health_check() -> Json<HealthResponse> {
+    Json(HealthResponse {
+        status: "ok".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_health_check() {
+        let response = health_check().await;
+        assert_eq!(response.status, "ok");
+    }
+}

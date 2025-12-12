@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: db-viewer-config
+  namespace: db-viewer
+data:
+  HOST: "0.0.0.0"
+  PORT: "8080"
+  SANDBOX_HOST: "sandbox-postgres"
+  SANDBOX_PORT: "5432"
+  SANDBOX_USER: "postgres"
+  UPLOAD_DIR: "/data/uploads"
+  TTL_DAYS: "7"
+  POLL_INTERVAL_SECS: "5"
+  RUST_LOG: "info,db_viewer=debug"

@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: metadata-postgres
+  namespace: db-viewer
+  labels:
+    app: metadata-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: metadata-postgres
+  template:
+    metadata:
+      labels:
+        app: metadata-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16-alpine
+          ports:
+            - containerPort: 5432
+          env:
+            - name: POSTGRES_DB
+              value: db_viewer
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: db-viewer-secrets
+                  key: SANDBOX_PASSWORD
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "1Gi"
+              cpu: "500m"
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: metadata-postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: metadata-postgres
+  namespace: db-viewer
+spec:
+  selector:
+    app: metadata-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+  type: ClusterIP

@@ -1,0 +1,48 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: ttl-cleanup
+  namespace: db-viewer
+spec:
+  schedule: "0 */6 * * *"  # Every 6 hours
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+            - name: cleanup
+              image: postgres:16-alpine
+              command:
+                - /bin/sh
+                - -c
+                - |
+                  # Connect to metadata DB and mark expired dumps
+                  psql $DATABASE_URL -c "
+                    UPDATE dumps
+                    SET status = 'DELETED', updated_at = NOW()
+                    WHERE expires_at < NOW()
+                      AND status NOT IN ('DELETED', 'ERROR');
+                  "
+                  
+                  # Get list of expired sandbox databases
+                  EXPIRED_DBS=$(psql $DATABASE_URL -t -c "
+                    SELECT sandbox_db_name FROM dumps
+                    WHERE status = 'DELETED'
+                      AND sandbox_db_name IS NOT NULL;
+                  ")
+                  
+                  # Drop each expired sandbox database
+                  for db in $EXPIRED_DBS; do
+                    psql "postgres://postgres:$SANDBOX_PASSWORD@sandbox-postgres:5432/postgres" -c "DROP DATABASE IF EXISTS \"$db\";"
+                  done
+              envFrom:
+                - secretRef:
+                    name: db-viewer-secrets
+              resources:
+                requests:
+                  memory: "64Mi"
+                  cpu: "50m"
+                limits:
+                  memory: "128Mi"
+                  cpu: "100m"
+          restartPolicy: OnFailure

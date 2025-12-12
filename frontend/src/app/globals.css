@@ -1,0 +1,81 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --foreground-rgb: 0, 0, 0;
+  --background-start-rgb: 244, 245, 247;
+  --background-end-rgb: 255, 255, 255;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --foreground-rgb: 255, 255, 255;
+    --background-start-rgb: 17, 24, 39;
+    --background-end-rgb: 31, 41, 55;
+  }
+}
+
+body {
+  color: rgb(var(--foreground-rgb));
+  background: linear-gradient(
+      to bottom,
+      transparent,
+      rgb(var(--background-end-rgb))
+    )
+    rgb(var(--background-start-rgb));
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #888;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+/* Table styles */
+.data-table {
+  @apply w-full border-collapse text-sm;
+}
+
+.data-table th {
+  @apply bg-gray-100 dark:bg-gray-800 text-left p-2 font-medium border-b;
+}
+
+.data-table td {
+  @apply p-2 border-b hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer;
+}
+
+/* Risk badge styles */
+.risk-badge {
+  @apply inline-flex items-center px-2 py-1 rounded text-xs font-medium;
+}
+
+.risk-badge-low {
+  @apply bg-green-100 text-green-800;
+}
+
+.risk-badge-medium {
+  @apply bg-yellow-100 text-yellow-800;
+}
+
+.risk-badge-high {
+  @apply bg-orange-100 text-orange-800;
+}
+
+.risk-badge-critical {
+  @apply bg-red-100 text-red-800;
+}
