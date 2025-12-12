@@ -5,8 +5,8 @@ use axum::{
     http::{Request, StatusCode},
     Router,
 };
-use tower::ServiceExt;
 use serde_json::json;
+use tower::ServiceExt;
 
 // Note: These tests require a running PostgreSQL database
 // Use testcontainers in integration test setup

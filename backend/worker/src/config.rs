@@ -25,19 +25,15 @@ impl WorkerConfig {
     /// Load configuration from environment variables
     pub fn from_env() -> Result<Self> {
         Ok(Self {
-            database_url: std::env::var("DATABASE_URL")
-                .context("DATABASE_URL is required")?,
-            sandbox_host: std::env::var("SANDBOX_HOST")
-                .unwrap_or_else(|_| "localhost".to_string()),
+            database_url: std::env::var("DATABASE_URL").context("DATABASE_URL is required")?,
+            sandbox_host: std::env::var("SANDBOX_HOST").unwrap_or_else(|_| "localhost".to_string()),
             sandbox_port: std::env::var("SANDBOX_PORT")
                 .unwrap_or_else(|_| "5432".to_string())
                 .parse()
                 .context("Invalid SANDBOX_PORT")?,
-            sandbox_user: std::env::var("SANDBOX_USER")
-                .unwrap_or_else(|_| "postgres".to_string()),
+            sandbox_user: std::env::var("SANDBOX_USER").unwrap_or_else(|_| "postgres".to_string()),
             sandbox_password: std::env::var("SANDBOX_PASSWORD").ok(),
-            upload_dir: std::env::var("UPLOAD_DIR")
-                .unwrap_or_else(|_| "/data/uploads".to_string()),
+            upload_dir: std::env::var("UPLOAD_DIR").unwrap_or_else(|_| "/data/uploads".to_string()),
             poll_interval_secs: std::env::var("POLL_INTERVAL_SECS")
                 .unwrap_or_else(|_| "5".to_string())
                 .parse()
@@ -77,7 +73,10 @@ mod tests {
             poll_interval_secs: 5,
         };
 
-        assert_eq!(config.sandbox_url(), "postgres://postgres@localhost:5432/postgres");
+        assert_eq!(
+            config.sandbox_url(),
+            "postgres://postgres@localhost:5432/postgres"
+        );
     }
 
     #[test]
@@ -92,6 +91,9 @@ mod tests {
             poll_interval_secs: 5,
         };
 
-        assert_eq!(config.sandbox_url(), "postgres://postgres:secret@localhost:5432/postgres");
+        assert_eq!(
+            config.sandbox_url(),
+            "postgres://postgres:secret@localhost:5432/postgres"
+        );
     }
 }

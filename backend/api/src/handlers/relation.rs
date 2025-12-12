@@ -5,8 +5,8 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
 use sqlx::types::Json as SqlxJson;
+use sqlx::Row;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -51,10 +51,12 @@ pub async fn explain_relation(
             let SqlxJson(graph): SqlxJson<SchemaGraph> = row.get("schema_graph");
             graph
         }
-        None => return Err(ApiError::NotFound(format!(
-            "Schema not found for dump {}",
-            id
-        ))),
+        None => {
+            return Err(ApiError::NotFound(format!(
+                "Schema not found for dump {}",
+                id
+            )))
+        }
     };
 
     let risk_calc = RiskCalculator::new(&schema_graph);

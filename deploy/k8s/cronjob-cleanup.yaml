@@ -4,7 +4,7 @@ metadata:
   name: ttl-cleanup
   namespace: db-viewer
 spec:
-  schedule: "0 */6 * * *"  # Every 6 hours
+  schedule: "0 */6 * * *" # Every 6 hours
   jobTemplate:
     spec:
       template:
@@ -23,14 +23,14 @@ spec:
                     WHERE expires_at < NOW()
                       AND status NOT IN ('DELETED', 'ERROR');
                   "
-                  
+
                   # Get list of expired sandbox databases
                   EXPIRED_DBS=$(psql $DATABASE_URL -t -c "
                     SELECT sandbox_db_name FROM dumps
                     WHERE status = 'DELETED'
                       AND sandbox_db_name IS NOT NULL;
                   ")
-                  
+
                   # Drop each expired sandbox database
                   for db in $EXPIRED_DBS; do
                     psql "postgres://postgres:$SANDBOX_PASSWORD@sandbox-postgres:5432/postgres" -c "DROP DATABASE IF EXISTS \"$db\";"

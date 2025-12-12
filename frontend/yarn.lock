@@ -2833,6 +2833,7 @@ __metadata:
     swr: "npm:^2.2.4"
     tailwindcss: "npm:^3.3.6"
     typescript: "npm:^5.3.3"
+    vite: "npm:^5.0.10"
     vitest: "npm:^1.1.0"
   languageName: unknown
   linkType: soft
@@ -7700,7 +7701,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"vite@npm:^5.0.0":
+"vite@npm:^5.0.0, vite@npm:^5.0.10":
   version: 5.4.21
   resolution: "vite@npm:5.4.21"
   dependencies:

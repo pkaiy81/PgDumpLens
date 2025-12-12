@@ -5,8 +5,8 @@ use axum::{
     Json,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::Row;
 use sqlx::types::Json as SqlxJson;
+use sqlx::Row;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -32,11 +32,11 @@ pub async fn get_schema(
         SELECT schema_graph
         FROM dump_schemas
         WHERE dump_id = $1
-        "#
+        "#,
     )
-        .bind(id)
-        .fetch_optional(&state.db_pool)
-        .await?;
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await?;
 
     match row {
         Some(row) => {
@@ -96,7 +96,8 @@ pub async fn get_table_data(
         .await?;
 
     let sandbox_db: String = match dump_row {
-        Some(row) => row.get::<Option<String>, _>("sandbox_db_name")
+        Some(row) => row
+            .get::<Option<String>, _>("sandbox_db_name")
             .ok_or_else(|| ApiError::BadRequest("Dump not restored yet".to_string()))?,
         None => return Err(ApiError::NotFound(format!("Dump {} not found", id))),
     };
@@ -107,13 +108,11 @@ pub async fn get_table_data(
     // Connect to sandbox and fetch data
     let sandbox_url = format!(
         "postgres://{}@{}:{}/{}",
-        state.config.sandbox_user,
-        state.config.sandbox_host,
-        state.config.sandbox_port,
-        sandbox_db
+        state.config.sandbox_user, state.config.sandbox_host, state.config.sandbox_port, sandbox_db
     );
 
-    let sandbox_pool = sqlx::postgres::PgPool::connect(&sandbox_url).await
+    let sandbox_pool = sqlx::postgres::PgPool::connect(&sandbox_url)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to connect to sandbox: {}", e)))?;
 
     // Get column names
@@ -123,28 +122,26 @@ pub async fn get_table_data(
         FROM information_schema.columns
         WHERE table_schema = $1 AND table_name = $2
         ORDER BY ordinal_position
-        "#
+        "#,
     )
-        .bind(schema)
-        .bind(table)
-        .fetch_all(&sandbox_pool)
-        .await?
-        .iter()
-        .map(|row| row.get("column_name"))
-        .collect();
+    .bind(schema)
+    .bind(table)
+    .fetch_all(&sandbox_pool)
+    .await?
+    .iter()
+    .map(|row| row.get("column_name"))
+    .collect();
 
     if columns.is_empty() {
-        return Err(ApiError::NotFound(format!("Table {}.{} not found", schema, table)));
+        return Err(ApiError::NotFound(format!(
+            "Table {}.{} not found",
+            schema, table
+        )));
     }
 
     // Get total count
-    let count_query = format!(
-        "SELECT COUNT(*) as cnt FROM \"{}\".\"{}\"",
-        schema, table
-    );
-    let count_row = sqlx::query(&count_query)
-        .fetch_one(&sandbox_pool)
-        .await?;
+    let count_query = format!("SELECT COUNT(*) as cnt FROM \"{}\".\"{}\"", schema, table);
+    let count_row = sqlx::query(&count_query).fetch_one(&sandbox_pool).await?;
     let total_count: i64 = count_row.get("cnt");
 
     // Fetch rows
@@ -210,20 +207,19 @@ pub async fn suggest_values(
         .await?;
 
     let sandbox_db: String = match dump_row {
-        Some(row) => row.get::<Option<String>, _>("sandbox_db_name")
+        Some(row) => row
+            .get::<Option<String>, _>("sandbox_db_name")
             .ok_or_else(|| ApiError::BadRequest("Dump not restored yet".to_string()))?,
         None => return Err(ApiError::NotFound(format!("Dump {} not found", id))),
     };
 
     let sandbox_url = format!(
         "postgres://{}@{}:{}/{}",
-        state.config.sandbox_user,
-        state.config.sandbox_host,
-        state.config.sandbox_port,
-        sandbox_db
+        state.config.sandbox_user, state.config.sandbox_host, state.config.sandbox_port, sandbox_db
     );
 
-    let sandbox_pool = sqlx::postgres::PgPool::connect(&sandbox_url).await
+    let sandbox_pool = sqlx::postgres::PgPool::connect(&sandbox_url)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to connect to sandbox: {}", e)))?;
 
     // Build suggestion query
@@ -237,8 +233,7 @@ pub async fn suggest_values(
             ORDER BY frequency DESC
             LIMIT {}
             "#,
-            query.column, schema, query.table,
-            query.column, query.column, limit
+            query.column, schema, query.table, query.column, query.column, limit
         )
     } else {
         format!(
@@ -259,9 +254,7 @@ pub async fn suggest_values(
             .fetch_all(&sandbox_pool)
             .await?
     } else {
-        sqlx::query(&suggest_query)
-            .fetch_all(&sandbox_pool)
-            .await?
+        sqlx::query(&suggest_query).fetch_all(&sandbox_pool).await?
     };
 
     let suggestions: Vec<SuggestItem> = rows

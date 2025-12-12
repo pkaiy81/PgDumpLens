@@ -25,7 +25,13 @@ pub struct PostgresAdapter {
 
 impl PostgresAdapter {
     /// Create a new PostgreSQL adapter
-    pub fn new(pool: PgPool, host: String, port: u16, user: String, password: Option<String>) -> Self {
+    pub fn new(
+        pool: PgPool,
+        host: String,
+        port: u16,
+        user: String,
+        password: Option<String>,
+    ) -> Self {
         Self {
             pool,
             host,
@@ -61,10 +67,14 @@ impl DbAdapter for PostgresAdapter {
         let mut cmd = if is_custom_format {
             let mut c = Command::new("pg_restore");
             c.args([
-                "-h", &self.host,
-                "-p", &self.port.to_string(),
-                "-U", &self.user,
-                "-d", db_name,
+                "-h",
+                &self.host,
+                "-p",
+                &self.port.to_string(),
+                "-U",
+                &self.user,
+                "-d",
+                db_name,
                 "--no-owner",
                 "--no-privileges",
                 dump_path,
@@ -74,11 +84,16 @@ impl DbAdapter for PostgresAdapter {
             // SQL format - use psql
             let mut c = Command::new("psql");
             c.args([
-                "-h", &self.host,
-                "-p", &self.port.to_string(),
-                "-U", &self.user,
-                "-d", db_name,
-                "-f", dump_path,
+                "-h",
+                &self.host,
+                "-p",
+                &self.port.to_string(),
+                "-U",
+                &self.user,
+                "-d",
+                db_name,
+                "-f",
+                dump_path,
             ]);
             c
         };
@@ -127,9 +142,7 @@ impl DbAdapter for PostgresAdapter {
         );
         let db_pool = PgPool::connect(&db_url).await?;
 
-        let rows = sqlx::query(query)
-            .fetch_all(&db_pool)
-            .await?;
+        let rows = sqlx::query(query).fetch_all(&db_pool).await?;
 
         let mut tables = Vec::new();
         for row in rows {
@@ -138,7 +151,9 @@ impl DbAdapter for PostgresAdapter {
             let estimated_row_count: i64 = row.get("estimated_rows");
 
             // Get columns for this table
-            let columns = self.get_columns(&db_pool, &schema_name, &table_name).await?;
+            let columns = self
+                .get_columns(&db_pool, &schema_name, &table_name)
+                .await?;
 
             tables.push(TableInfo {
                 schema_name,
@@ -181,12 +196,11 @@ impl DbAdapter for PostgresAdapter {
         );
         let db_pool = PgPool::connect(&db_url).await?;
 
-        let rows = sqlx::query(query)
-            .fetch_all(&db_pool)
-            .await?;
+        let rows = sqlx::query(query).fetch_all(&db_pool).await?;
 
         // Group by constraint name to handle composite FKs
-        let mut fk_map: std::collections::HashMap<String, ForeignKey> = std::collections::HashMap::new();
+        let mut fk_map: std::collections::HashMap<String, ForeignKey> =
+            std::collections::HashMap::new();
 
         for row in rows {
             let constraint_name: String = row.get("constraint_name");
@@ -197,17 +211,20 @@ impl DbAdapter for PostgresAdapter {
                 fk.source_columns.push(source_column);
                 fk.target_columns.push(target_column);
             } else {
-                fk_map.insert(constraint_name.clone(), ForeignKey {
-                    constraint_name,
-                    source_schema: row.get("source_schema"),
-                    source_table: row.get("source_table"),
-                    source_columns: vec![source_column],
-                    target_schema: row.get("target_schema"),
-                    target_table: row.get("target_table"),
-                    target_columns: vec![target_column],
-                    on_delete: Self::parse_fk_action(row.get("delete_rule")),
-                    on_update: Self::parse_fk_action(row.get("update_rule")),
-                });
+                fk_map.insert(
+                    constraint_name.clone(),
+                    ForeignKey {
+                        constraint_name,
+                        source_schema: row.get("source_schema"),
+                        source_table: row.get("source_table"),
+                        source_columns: vec![source_column],
+                        target_schema: row.get("target_schema"),
+                        target_table: row.get("target_table"),
+                        target_columns: vec![target_column],
+                        on_delete: Self::parse_fk_action(row.get("delete_rule")),
+                        on_update: Self::parse_fk_action(row.get("update_rule")),
+                    },
+                );
             }
         }
 
@@ -227,9 +244,7 @@ impl DbAdapter for PostgresAdapter {
         );
         let db_pool = PgPool::connect(&db_url).await?;
 
-        let rows = sqlx::query(query)
-            .fetch_all(&db_pool)
-            .await?;
+        let rows = sqlx::query(query).fetch_all(&db_pool).await?;
 
         let counts = rows
             .iter()
@@ -264,9 +279,7 @@ impl DbAdapter for PostgresAdapter {
             schema, table, limit
         );
 
-        let rows = sqlx::query(&query)
-            .fetch_all(&db_pool)
-            .await?;
+        let rows = sqlx::query(&query).fetch_all(&db_pool).await?;
 
         let result: Vec<serde_json::Value> = rows
             .iter()
@@ -297,7 +310,7 @@ impl DbAdapter for PostgresAdapter {
             .bind(db_name)
             .fetch_one(&self.pool)
             .await?;
-        
+
         Ok(row.get::<bool, _>(0))
     }
 
@@ -316,7 +329,12 @@ impl DbAdapter for PostgresAdapter {
 }
 
 impl PostgresAdapter {
-    async fn get_columns(&self, pool: &PgPool, schema: &str, table: &str) -> Result<Vec<ColumnInfo>> {
+    async fn get_columns(
+        &self,
+        pool: &PgPool,
+        schema: &str,
+        table: &str,
+    ) -> Result<Vec<ColumnInfo>> {
         let query = r#"
             SELECT 
                 c.column_name,
@@ -365,10 +383,25 @@ mod tests {
 
     #[test]
     fn test_parse_fk_action() {
-        assert_eq!(PostgresAdapter::parse_fk_action("CASCADE"), FkAction::Cascade);
-        assert_eq!(PostgresAdapter::parse_fk_action("SET NULL"), FkAction::SetNull);
-        assert_eq!(PostgresAdapter::parse_fk_action("RESTRICT"), FkAction::Restrict);
-        assert_eq!(PostgresAdapter::parse_fk_action("NO ACTION"), FkAction::NoAction);
-        assert_eq!(PostgresAdapter::parse_fk_action("unknown"), FkAction::NoAction);
+        assert_eq!(
+            PostgresAdapter::parse_fk_action("CASCADE"),
+            FkAction::Cascade
+        );
+        assert_eq!(
+            PostgresAdapter::parse_fk_action("SET NULL"),
+            FkAction::SetNull
+        );
+        assert_eq!(
+            PostgresAdapter::parse_fk_action("RESTRICT"),
+            FkAction::Restrict
+        );
+        assert_eq!(
+            PostgresAdapter::parse_fk_action("NO ACTION"),
+            FkAction::NoAction
+        );
+        assert_eq!(
+            PostgresAdapter::parse_fk_action("unknown"),
+            FkAction::NoAction
+        );
     }
 }

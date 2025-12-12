@@ -1,15 +1,15 @@
 //! Database adapter abstraction for supporting multiple database types
 
-use async_trait::async_trait;
 use crate::domain::{ForeignKey, SchemaGraph, TableInfo};
 use crate::error::Result;
+use async_trait::async_trait;
 
 pub mod postgres;
 
 pub use postgres::PostgresAdapter;
 
 /// Abstract database adapter trait
-/// 
+///
 /// This trait defines the interface for interacting with different database systems.
 /// Each database type (PostgreSQL, MySQL, etc.) implements this trait.
 #[async_trait]
@@ -27,7 +27,10 @@ pub trait DbAdapter: Send + Sync {
     async fn build_schema_graph(&self, db_name: &str) -> Result<SchemaGraph> {
         let tables = self.list_tables(db_name).await?;
         let foreign_keys = self.list_foreign_keys(db_name).await?;
-        Ok(SchemaGraph { tables, foreign_keys })
+        Ok(SchemaGraph {
+            tables,
+            foreign_keys,
+        })
     }
 
     /// Estimate row counts for all tables

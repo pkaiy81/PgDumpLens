@@ -5,8 +5,8 @@ use axum::{
     Json,
 };
 use serde::Serialize;
-use sqlx::Row;
 use sqlx::types::Json as SqlxJson;
+use sqlx::Row;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -48,7 +48,7 @@ pub async fn get_column_risk(
 ) -> ApiResult<Json<RiskResponse>> {
     let schema_graph = fetch_schema_graph(&state, id).await?;
     let calc = RiskCalculator::new(&schema_graph);
-    
+
     // For now, use 0 as referencing count (would need actual query in production)
     let risk = calc.calculate_column_risk(&schema, &table, &column, 0);
 

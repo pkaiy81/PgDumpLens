@@ -2,7 +2,7 @@
 
 use chrono::Utc;
 use sqlx::{postgres::PgPool, Row};
-use tracing::{info, error};
+use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::config::WorkerConfig;
@@ -51,12 +51,11 @@ pub async fn process_pending_jobs<A: DbAdapter>(
 }
 
 async fn fetch_jobs_by_status(pool: &PgPool, status: DumpStatus) -> anyhow::Result<Vec<Uuid>> {
-    let rows = sqlx::query(
-        "SELECT id FROM dumps WHERE status = $1 ORDER BY updated_at ASC LIMIT 10"
-    )
-        .bind(status.as_str())
-        .fetch_all(pool)
-        .await?;
+    let rows =
+        sqlx::query("SELECT id FROM dumps WHERE status = $1 ORDER BY updated_at ASC LIMIT 10")
+            .bind(status.as_str())
+            .fetch_all(pool)
+            .await?;
 
     Ok(rows.iter().map(|row| row.get("id")).collect())
 }
@@ -81,14 +80,14 @@ async fn process_restore<A: DbAdapter>(
         UPDATE dumps
         SET status = $1, sandbox_db_name = $2, updated_at = $3
         WHERE id = $4
-        "#
+        "#,
     )
-        .bind(DumpStatus::Analyzing.as_str())
-        .bind(&sandbox_db_name)
-        .bind(Utc::now())
-        .bind(dump_id)
-        .execute(db_pool)
-        .await?;
+    .bind(DumpStatus::Analyzing.as_str())
+    .bind(&sandbox_db_name)
+    .bind(Utc::now())
+    .bind(dump_id)
+    .execute(db_pool)
+    .await?;
 
     Ok(())
 }
@@ -106,7 +105,7 @@ async fn process_analysis<A: DbAdapter>(
         .bind(dump_id)
         .fetch_one(db_pool)
         .await?;
-    
+
     let sandbox_db: String = row.get("sandbox_db_name");
 
     // Build schema graph
@@ -119,13 +118,13 @@ async fn process_analysis<A: DbAdapter>(
         VALUES ($1, $2, $3)
         ON CONFLICT (dump_id) DO UPDATE
         SET schema_graph = $2, created_at = $3
-        "#
+        "#,
     )
-        .bind(dump_id)
-        .bind(serde_json::to_value(&schema_graph)?)
-        .bind(Utc::now())
-        .execute(db_pool)
-        .await?;
+    .bind(dump_id)
+    .bind(serde_json::to_value(&schema_graph)?)
+    .bind(Utc::now())
+    .execute(db_pool)
+    .await?;
 
     // Update status to READY
     sqlx::query(
@@ -133,13 +132,13 @@ async fn process_analysis<A: DbAdapter>(
         UPDATE dumps
         SET status = $1, updated_at = $2
         WHERE id = $3
-        "#
+        "#,
     )
-        .bind(DumpStatus::Ready.as_str())
-        .bind(Utc::now())
-        .bind(dump_id)
-        .execute(db_pool)
-        .await?;
+    .bind(DumpStatus::Ready.as_str())
+    .bind(Utc::now())
+    .bind(dump_id)
+    .execute(db_pool)
+    .await?;
 
     Ok(())
 }
@@ -150,14 +149,14 @@ async fn mark_error(pool: &PgPool, dump_id: Uuid, error_message: &str) -> anyhow
         UPDATE dumps
         SET status = $1, error_message = $2, updated_at = $3
         WHERE id = $4
-        "#
+        "#,
     )
-        .bind(DumpStatus::Error.as_str())
-        .bind(error_message)
-        .bind(Utc::now())
-        .bind(dump_id)
-        .execute(pool)
-        .await?;
+    .bind(DumpStatus::Error.as_str())
+    .bind(error_message)
+    .bind(Utc::now())
+    .bind(dump_id)
+    .execute(pool)
+    .await?;
 
     Ok(())
 }

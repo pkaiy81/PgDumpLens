@@ -1,7 +1,7 @@
 //! Dump management handlers
 
 use axum::{
-    extract::{Path, State, Multipart},
+    extract::{Multipart, Path, State},
     Json,
 };
 use chrono::{Duration, Utc};
@@ -44,15 +44,17 @@ pub async fn create_dump(
     };
 
     // Check slug uniqueness
-    let existing: Option<(Uuid,)> = sqlx::query_as(
-        "SELECT id FROM dumps WHERE slug = $1 AND status != 'DELETED'"
-    )
-        .bind(&slug)
-        .fetch_optional(&state.db_pool)
-        .await?;
+    let existing: Option<(Uuid,)> =
+        sqlx::query_as("SELECT id FROM dumps WHERE slug = $1 AND status != 'DELETED'")
+            .bind(&slug)
+            .fetch_optional(&state.db_pool)
+            .await?;
 
     if existing.is_some() {
-        return Err(ApiError::Conflict(format!("Slug '{}' already exists", slug)));
+        return Err(ApiError::Conflict(format!(
+            "Slug '{}' already exists",
+            slug
+        )));
     }
 
     // Insert dump record
@@ -60,16 +62,16 @@ pub async fn create_dump(
         r#"
         INSERT INTO dumps (id, slug, name, status, created_at, updated_at, expires_at)
         VALUES ($1, $2, $3, $4, $5, $5, $6)
-        "#
+        "#,
     )
-        .bind(id)
-        .bind(&slug)
-        .bind(&req.name)
-        .bind(DumpStatus::Created.as_str())
-        .bind(now)
-        .bind(expires_at)
-        .execute(&state.db_pool)
-        .await?;
+    .bind(id)
+    .bind(&slug)
+    .bind(&req.name)
+    .bind(DumpStatus::Created.as_str())
+    .bind(now)
+    .bind(expires_at)
+    .execute(&state.db_pool)
+    .await?;
 
     Ok(Json(CreateDumpResponse {
         id,
@@ -79,9 +81,7 @@ pub async fn create_dump(
 }
 
 /// List all dumps
-pub async fn list_dumps(
-    State(state): State<AppState>,
-) -> ApiResult<Json<Vec<DumpSummary>>> {
+pub async fn list_dumps(State(state): State<AppState>) -> ApiResult<Json<Vec<DumpSummary>>> {
     let rows = sqlx::query(
         r#"
         SELECT id, slug, name, status, file_size, created_at, expires_at
@@ -89,10 +89,10 @@ pub async fn list_dumps(
         WHERE status != 'DELETED'
         ORDER BY created_at DESC
         LIMIT 100
-        "#
+        "#,
     )
-        .fetch_all(&state.db_pool)
-        .await?;
+    .fetch_all(&state.db_pool)
+    .await?;
 
     let dumps: Vec<DumpSummary> = rows
         .iter()
@@ -142,15 +142,18 @@ pub async fn get_dump_by_slug(
                file_size, created_at, updated_at, expires_at, sandbox_db_name
         FROM dumps
         WHERE slug = $1 AND status != 'DELETED'
-        "#
+        "#,
     )
-        .bind(&slug)
-        .fetch_optional(&state.db_pool)
-        .await?;
+    .bind(&slug)
+    .fetch_optional(&state.db_pool)
+    .await?;
 
     match row {
         Some(row) => Ok(Json(row_to_dump(&row))),
-        None => Err(ApiError::NotFound(format!("Dump with slug '{}' not found", slug))),
+        None => Err(ApiError::NotFound(format!(
+            "Dump with slug '{}' not found",
+            slug
+        ))),
     }
 }
 
@@ -163,32 +166,39 @@ pub async fn upload_dump(
     // Verify dump exists and is in correct state
     let dump = fetch_dump_by_id(&state, id).await?;
     if dump.status != DumpStatus::Created {
-        return Err(ApiError::BadRequest(
-            format!("Dump is in '{}' state, expected 'CREATED'", dump.status.as_str())
-        ));
+        return Err(ApiError::BadRequest(format!(
+            "Dump is in '{}' state, expected 'CREATED'",
+            dump.status.as_str()
+        )));
     }
 
     // Create upload directory
     let upload_dir = format!("{}/{}", state.config.upload_dir, id);
-    tokio::fs::create_dir_all(&upload_dir).await
+    tokio::fs::create_dir_all(&upload_dir)
+        .await
         .map_err(|e| ApiError::Internal(format!("Failed to create upload directory: {}", e)))?;
 
     let mut file_size: i64 = 0;
     let mut original_filename: Option<String> = None;
 
     // Process multipart upload
-    while let Some(field) = multipart.next_field().await
-        .map_err(|e| ApiError::BadRequest(format!("Multipart error: {}", e)))? {
-        
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ApiError::BadRequest(format!("Multipart error: {}", e)))?
+    {
         if field.name() == Some("file") {
             original_filename = field.file_name().map(|s| s.to_string());
-            let data = field.bytes().await
+            let data = field
+                .bytes()
+                .await
                 .map_err(|e| ApiError::BadRequest(format!("Failed to read file: {}", e)))?;
-            
+
             file_size = data.len() as i64;
             let file_path = format!("{}/dump.sql", upload_dir);
-            
-            tokio::fs::write(&file_path, &data).await
+
+            tokio::fs::write(&file_path, &data)
+                .await
                 .map_err(|e| ApiError::Internal(format!("Failed to write file: {}", e)))?;
         }
     }
@@ -199,15 +209,15 @@ pub async fn upload_dump(
         UPDATE dumps
         SET status = $1, original_filename = $2, file_size = $3, updated_at = $4
         WHERE id = $5
-        "#
+        "#,
     )
-        .bind(DumpStatus::Uploaded.as_str())
-        .bind(&original_filename)
-        .bind(file_size)
-        .bind(Utc::now())
-        .bind(id)
-        .execute(&state.db_pool)
-        .await?;
+    .bind(DumpStatus::Uploaded.as_str())
+    .bind(&original_filename)
+    .bind(file_size)
+    .bind(Utc::now())
+    .bind(id)
+    .execute(&state.db_pool)
+    .await?;
 
     fetch_dump_by_id(&state, id).await.map(Json)
 }
@@ -218,11 +228,12 @@ pub async fn restore_dump(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Dump>> {
     let dump = fetch_dump_by_id(&state, id).await?;
-    
+
     if dump.status != DumpStatus::Uploaded {
-        return Err(ApiError::BadRequest(
-            format!("Dump is in '{}' state, expected 'UPLOADED'", dump.status.as_str())
-        ));
+        return Err(ApiError::BadRequest(format!(
+            "Dump is in '{}' state, expected 'UPLOADED'",
+            dump.status.as_str()
+        )));
     }
 
     // Update status to restoring (worker will pick it up)
@@ -231,13 +242,13 @@ pub async fn restore_dump(
         UPDATE dumps
         SET status = $1, updated_at = $2
         WHERE id = $3
-        "#
+        "#,
     )
-        .bind(DumpStatus::Restoring.as_str())
-        .bind(Utc::now())
-        .bind(id)
-        .execute(&state.db_pool)
-        .await?;
+    .bind(DumpStatus::Restoring.as_str())
+    .bind(Utc::now())
+    .bind(id)
+    .execute(&state.db_pool)
+    .await?;
 
     fetch_dump_by_id(&state, id).await.map(Json)
 }
@@ -251,11 +262,11 @@ async fn fetch_dump_by_id(state: &AppState, id: Uuid) -> ApiResult<Dump> {
                file_size, created_at, updated_at, expires_at, sandbox_db_name
         FROM dumps
         WHERE id = $1
-        "#
+        "#,
     )
-        .bind(id)
-        .fetch_optional(&state.db_pool)
-        .await?;
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await?;
 
     match row {
         Some(row) => Ok(row_to_dump(&row)),
