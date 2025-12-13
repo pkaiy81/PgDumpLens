@@ -1,5 +1,5 @@
 # Build stage
-FROM node:20-alpine AS builder
+FROM node:20-alpine3.21 AS builder
 
 RUN corepack enable
 
@@ -19,7 +19,7 @@ COPY . .
 RUN yarn build
 
 # Production stage
-FROM node:20-alpine AS runner
+FROM node:20-alpine3.21 AS runner
 
 RUN corepack enable
 
