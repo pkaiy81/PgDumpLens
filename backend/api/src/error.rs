@@ -10,6 +10,7 @@ use thiserror::Error;
 
 /// API error type
 #[derive(Error, Debug)]
+#[allow(dead_code)]
 pub enum ApiError {
     #[error("Not found: {0}")]
     NotFound(String),

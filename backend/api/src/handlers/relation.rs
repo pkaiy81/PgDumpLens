@@ -17,6 +17,7 @@ use db_viewer_core::sql_gen::SqlGenerator;
 
 /// Explain relation request
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct ExplainRelationRequest {
     pub schema: String,
     pub table: String,

@@ -103,20 +103,15 @@ pub struct ForeignKey {
 }
 
 /// Foreign key action
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum FkAction {
+    #[default]
     NoAction,
     Restrict,
     Cascade,
     SetNull,
     SetDefault,
-}
-
-impl Default for FkAction {
-    fn default() -> Self {
-        FkAction::NoAction
-    }
 }
 
 impl std::fmt::Display for FkAction {

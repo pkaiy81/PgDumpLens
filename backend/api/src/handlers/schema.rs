@@ -57,6 +57,7 @@ pub async fn get_schema(
 
 /// Table data query parameters
 #[derive(Debug, Deserialize)]
+#[allow(dead_code)]
 pub struct TableDataQuery {
     pub limit: Option<usize>,
     pub offset: Option<usize>,
@@ -271,6 +272,7 @@ pub async fn suggest_values(
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
 
     #[test]

@@ -4,6 +4,7 @@ use anyhow::{Context, Result};
 
 /// Application configuration
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct AppConfig {
     /// Server host
     pub host: String,
