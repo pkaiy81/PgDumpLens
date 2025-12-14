@@ -2805,39 +2805,6 @@ __metadata:
   languageName: node
   linkType: hard
 
-"db-viewer-frontend@workspace:.":
-  version: 0.0.0-use.local
-  resolution: "db-viewer-frontend@workspace:."
-  dependencies:
-    "@playwright/test": "npm:^1.40.1"
-    "@testing-library/jest-dom": "npm:^6.1.6"
-    "@testing-library/react": "npm:^14.1.2"
-    "@types/node": "npm:^20.10.4"
-    "@types/react": "npm:^18.2.45"
-    "@types/react-dom": "npm:^18.2.17"
-    "@vitejs/plugin-react": "npm:^4.2.1"
-    "@vitest/coverage-v8": "npm:^1.1.0"
-    "@vitest/ui": "npm:^1.1.0"
-    autoprefixer: "npm:^10.4.16"
-    clsx: "npm:^2.0.0"
-    eslint: "npm:^8.55.0"
-    eslint-config-next: "npm:14.0.4"
-    jsdom: "npm:^23.0.1"
-    lucide-react: "npm:^0.294.0"
-    mermaid: "npm:^10.6.1"
-    msw: "npm:^2.0.11"
-    next: "npm:14.0.4"
-    postcss: "npm:^8.4.32"
-    react: "npm:^18.2.0"
-    react-dom: "npm:^18.2.0"
-    swr: "npm:^2.2.4"
-    tailwindcss: "npm:^3.3.6"
-    typescript: "npm:^5.3.3"
-    vite: "npm:^5.0.10"
-    vitest: "npm:^1.1.0"
-  languageName: unknown
-  linkType: soft
-
 "debug@npm:4, debug@npm:^4.0.0, debug@npm:^4.1.0, debug@npm:^4.1.1, debug@npm:^4.3.1, debug@npm:^4.3.2, debug@npm:^4.3.4, debug@npm:^4.4.0":
   version: 4.4.3
   resolution: "debug@npm:4.4.3"
@@ -6013,6 +5980,39 @@ __metadata:
   checksum: f63e1bc1b33593cdf094ed6ff5c49c1c0dc5dc20a646ca9725cc7fe7cd9995002d51d5685b9b2ec6814342935748b711bafa840f84c0bb04e38ff40a335c94dc
   languageName: node
   linkType: hard
+
+"pgdumplens-frontend@workspace:.":
+  version: 0.0.0-use.local
+  resolution: "pgdumplens-frontend@workspace:."
+  dependencies:
+    "@playwright/test": "npm:^1.40.1"
+    "@testing-library/jest-dom": "npm:^6.1.6"
+    "@testing-library/react": "npm:^14.1.2"
+    "@types/node": "npm:^20.10.4"
+    "@types/react": "npm:^18.2.45"
+    "@types/react-dom": "npm:^18.2.17"
+    "@vitejs/plugin-react": "npm:^4.2.1"
+    "@vitest/coverage-v8": "npm:^1.1.0"
+    "@vitest/ui": "npm:^1.1.0"
+    autoprefixer: "npm:^10.4.16"
+    clsx: "npm:^2.0.0"
+    eslint: "npm:^8.55.0"
+    eslint-config-next: "npm:14.0.4"
+    jsdom: "npm:^23.0.1"
+    lucide-react: "npm:^0.294.0"
+    mermaid: "npm:^10.6.1"
+    msw: "npm:^2.0.11"
+    next: "npm:14.0.4"
+    postcss: "npm:^8.4.32"
+    react: "npm:^18.2.0"
+    react-dom: "npm:^18.2.0"
+    swr: "npm:^2.2.4"
+    tailwindcss: "npm:^3.3.6"
+    typescript: "npm:^5.3.3"
+    vite: "npm:^5.0.10"
+    vitest: "npm:^1.1.0"
+  languageName: unknown
+  linkType: soft
 
 "picocolors@npm:^1.0.0, picocolors@npm:^1.1.1":
   version: 1.1.1

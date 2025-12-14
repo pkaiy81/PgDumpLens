@@ -3,14 +3,14 @@
 
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory=$true, Position=0)]
-    [ValidateScript({Test-Path $_ -PathType Leaf})]
+    [Parameter(Mandatory = $true, Position = 0)]
+    [ValidateScript({ Test-Path $_ -PathType Leaf })]
     [string]$DumpFile,
 
-    [Parameter(Position=1)]
+    [Parameter(Position = 1)]
     [string]$Name,
 
-    [Parameter(Position=2)]
+    [Parameter(Position = 2)]
     [string]$ServerUrl = "http://localhost:8080"
 )
 
