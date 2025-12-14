@@ -1,0 +1,142 @@
+version: '3.8'
+
+services:
+  # API Server
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pgdumplens-api
+    restart: unless-stopped
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8080
+      - RUST_LOG=info,pgdumplens_api=info,pgdumplens_core=info
+      - DATABASE_URL=postgres://dbviewer:${DB_PASSWORD}@metadata-db:5432/dbviewer_metadata
+      - SANDBOX_HOST=sandbox-db
+      - SANDBOX_PORT=5432
+      - SANDBOX_USER=sandbox
+      - SANDBOX_PASSWORD=${SANDBOX_PASSWORD}
+      - DUMP_STORAGE_PATH=/dumps
+      - DEFAULT_TTL_SECONDS=86400
+    volumes:
+      - dump-files:/dumps
+    depends_on:
+      metadata-db:
+        condition: service_healthy
+      sandbox-db:
+        condition: service_healthy
+    networks:
+      - pgdumplens-net
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Background Worker
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pgdumplens-worker
+    command: ["./worker"]
+    restart: unless-stopped
+    environment:
+      - RUST_LOG=info,pgdumplens_worker=info,pgdumplens_core=info
+      - DATABASE_URL=postgres://dbviewer:${DB_PASSWORD}@metadata-db:5432/dbviewer_metadata
+      - SANDBOX_HOST=sandbox-db
+      - SANDBOX_PORT=5432
+      - SANDBOX_USER=sandbox
+      - SANDBOX_PASSWORD=${SANDBOX_PASSWORD}
+      - DUMP_STORAGE_PATH=/dumps
+      - WORKER_POLL_INTERVAL_SECS=5
+    volumes:
+      - dump-files:/dumps
+    depends_on:
+      metadata-db:
+        condition: service_healthy
+      sandbox-db:
+        condition: service_healthy
+    networks:
+      - pgdumplens-net
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: pgdumplens-frontend
+    restart: unless-stopped
+    environment:
+      - API_URL=http://api:8080
+    depends_on:
+      - api
+    networks:
+      - pgdumplens-net
+
+  # Nginx Reverse Proxy
+  nginx:
+    image: nginx:alpine
+    container_name: pgdumplens-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./deploy/nginx/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api
+      - frontend
+    networks:
+      - pgdumplens-net
+
+  # Metadata Database
+  metadata-db:
+    image: postgres:16-alpine
+    container_name: pgdumplens-metadata
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dbviewer
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: dbviewer_metadata
+    volumes:
+      - metadata-data:/var/lib/postgresql/data
+      - ./backend/migrations:/docker-entrypoint-initdb.d:ro
+    networks:
+      - pgdumplens-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dbviewer -d dbviewer_metadata"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Sandbox Database
+  sandbox-db:
+    image: postgres:16-alpine
+    container_name: pgdumplens-sandbox
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sandbox
+      POSTGRES_PASSWORD: ${SANDBOX_PASSWORD}
+      POSTGRES_DB: sandbox_template
+    volumes:
+      - sandbox-data:/var/lib/postgresql/data
+      - dump-files:/dumps
+    networks:
+      - pgdumplens-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sandbox -d sandbox_template"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  metadata-data:
+  sandbox-data:
+  dump-files:
+
+networks:
+  pgdumplens-net:
+    driver: bridge

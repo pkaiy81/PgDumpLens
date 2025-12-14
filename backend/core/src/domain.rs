@@ -1,4 +1,4 @@
-//! Domain models for the DB Viewer service
+//! Domain models for the PgDumpLens service
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};

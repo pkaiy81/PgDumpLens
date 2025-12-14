@@ -1,4 +1,4 @@
--- DB Viewer Metadata Schema
+-- PgDumpLens Metadata Schema
 -- Initial migration
 
 -- Dumps table

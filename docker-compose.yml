@@ -4,7 +4,7 @@ services:
   # Metadata Database - stores dump info, schema cache, job queue
   metadata-db:
     image: postgres:16-alpine
-    container_name: db-viewer-metadata
+    container_name: pgdumplens-metadata
     environment:
       POSTGRES_USER: dbviewer
       POSTGRES_PASSWORD: dbviewer_dev
@@ -23,7 +23,7 @@ services:
   # Sandbox Database - restored dump databases are created here
   sandbox-db:
     image: postgres:16-alpine
-    container_name: db-viewer-sandbox
+    container_name: pgdumplens-sandbox
     environment:
       POSTGRES_USER: sandbox
       POSTGRES_PASSWORD: sandbox_dev

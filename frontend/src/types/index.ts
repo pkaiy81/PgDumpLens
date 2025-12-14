@@ -1,4 +1,4 @@
-// Type definitions for DB Viewer
+// Type definitions for PgDumpLens
 
 export interface DumpSummary {
   id: string;

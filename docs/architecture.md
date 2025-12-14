@@ -1,8 +1,8 @@
-# DB Viewer - Architecture Documentation
+# PgDumpLens - Architecture Documentation
 
 ## System Architecture
 
-This document provides visual diagrams explaining the DB Viewer service architecture and workflows.
+This document provides visual diagrams explaining the PgDumpLens service architecture and workflows.
 
 ---
 
@@ -221,7 +221,7 @@ graph TB
     subgraph "Kubernetes Cluster"
         Ingress[Ingress Controller]
         
-        subgraph "db-viewer namespace"
+        subgraph "pgdumplens namespace"
             FE[Frontend<br/>2 replicas]
             API_SVC[API Service]
             API[API<br/>2 replicas]
@@ -303,7 +303,7 @@ flowchart LR
 
 ```mermaid
 mindmap
-  root((DB Viewer))
+  root((PgDumpLens))
     Backend
       Rust
         Axum

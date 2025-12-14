@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: ttl-cleanup
-  namespace: db-viewer
+  namespace: pgdumplens
 spec:
   schedule: "0 */6 * * *" # Every 6 hours
   jobTemplate:
@@ -37,7 +37,7 @@ spec:
                   done
               envFrom:
                 - secretRef:
-                    name: db-viewer-secrets
+                    name: pgdumplens-secrets
               resources:
                 requests:
                   memory: "64Mi"

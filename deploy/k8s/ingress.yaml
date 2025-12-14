@@ -1,8 +1,8 @@
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: db-viewer-ingress
-  namespace: db-viewer
+  name: pgdumplens-ingress
+  namespace: pgdumplens
   annotations:
     nginx.ingress.kubernetes.io/proxy-body-size: "500m"
     nginx.ingress.kubernetes.io/proxy-read-timeout: "300"

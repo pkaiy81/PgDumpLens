@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: api
-  namespace: db-viewer
+  namespace: pgdumplens
   labels:
     app: api
 spec:
@@ -17,15 +17,15 @@ spec:
     spec:
       containers:
         - name: api
-          image: db-viewer/api:latest
+          image: pgdumplens/api:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 8080
           envFrom:
             - configMapRef:
-                name: db-viewer-config
+                name: pgdumplens-config
             - secretRef:
-                name: db-viewer-secrets
+                name: pgdumplens-secrets
           volumeMounts:
             - name: uploads
               mountPath: /data/uploads
@@ -57,7 +57,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: api
-  namespace: db-viewer
+  namespace: pgdumplens
 spec:
   selector:
     app: api

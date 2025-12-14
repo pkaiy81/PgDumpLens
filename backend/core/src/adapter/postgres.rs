@@ -2,12 +2,21 @@
 
 use async_trait::async_trait;
 use sqlx::{postgres::PgPool, Row};
+use std::fs::File;
+use std::io::{BufReader, Read};
+use std::path::Path;
 use std::process::Command;
 use tracing::{info, warn};
 
 use crate::adapter::DbAdapter;
 use crate::domain::{ColumnInfo, FkAction, ForeignKey, TableInfo};
 use crate::error::{CoreError, Result};
+
+/// Magic bytes for pg_dump custom format
+const PG_DUMP_CUSTOM_MAGIC: [u8; 5] = [0x50, 0x47, 0x44, 0x4D, 0x50]; // "PGDMP"
+
+/// Magic bytes for gzip compression
+const GZIP_MAGIC: [u8; 2] = [0x1F, 0x8B];
 
 /// PostgreSQL database adapter
 pub struct PostgresAdapter {
@@ -51,6 +60,84 @@ impl PostgresAdapter {
             _ => FkAction::NoAction,
         }
     }
+
+    /// Detect if file is gzip compressed and decompress if needed
+    /// Returns the path to the (possibly decompressed) file
+    async fn decompress_if_needed(&self, dump_path: &str) -> Result<String> {
+        let path = Path::new(dump_path);
+        let file = File::open(path)
+            .map_err(|e| CoreError::RestoreFailed(format!("Failed to open dump file: {}", e)))?;
+        let mut reader = BufReader::new(file);
+        let mut magic = [0u8; 2];
+
+        if reader.read_exact(&mut magic).is_ok() && magic == GZIP_MAGIC {
+            info!("Detected gzip-compressed dump, decompressing...");
+
+            // Create decompressed file path
+            let decompressed_path = if dump_path.ends_with(".gz") {
+                dump_path.strip_suffix(".gz").unwrap().to_string()
+            } else {
+                format!("{}.decompressed", dump_path)
+            };
+
+            // Decompress using gzip command
+            let output = Command::new("gzip")
+                .args(["-dk", dump_path]) // -d = decompress, -k = keep original
+                .output()
+                .map_err(|e| {
+                    CoreError::RestoreFailed(format!("Failed to decompress gzip file: {}", e))
+                })?;
+
+            if !output.status.success() {
+                // Try gunzip if gzip -d fails
+                let output2 = Command::new("gunzip")
+                    .args(["-k", dump_path])
+                    .output()
+                    .map_err(|e| {
+                        CoreError::RestoreFailed(format!("Failed to decompress with gunzip: {}", e))
+                    })?;
+
+                if !output2.status.success() {
+                    return Err(CoreError::RestoreFailed(format!(
+                        "Failed to decompress gzip: {}",
+                        String::from_utf8_lossy(&output2.stderr)
+                    )));
+                }
+            }
+
+            info!("Decompressed to: {}", decompressed_path);
+            return Ok(decompressed_path);
+        }
+
+        // Not compressed, return original path
+        Ok(dump_path.to_string())
+    }
+
+    /// Detect pg_dump format by reading magic bytes
+    /// Returns true for custom/tar format, false for plain SQL
+    fn detect_pg_dump_format(&self, dump_path: &str) -> Result<bool> {
+        let path = Path::new(dump_path);
+        let file = File::open(path).map_err(|e| {
+            CoreError::RestoreFailed(format!(
+                "Failed to open dump file for format detection: {}",
+                e
+            ))
+        })?;
+        let mut reader = BufReader::new(file);
+        let mut magic = [0u8; 5];
+
+        if reader.read_exact(&mut magic).is_ok() {
+            // Check for PGDMP magic (custom format)
+            if magic == PG_DUMP_CUSTOM_MAGIC {
+                return Ok(true);
+            }
+        }
+
+        // If not custom format, assume plain SQL
+        // We could also check for tar format (starts with file entries),
+        // but pg_restore handles both custom and tar the same way
+        Ok(false)
+    }
 }
 
 #[async_trait]
@@ -61,8 +148,18 @@ impl DbAdapter for PostgresAdapter {
         // Create database first
         self.create_database(db_name).await?;
 
-        // Build pg_restore or psql command based on file extension
-        let is_custom_format = dump_path.ends_with(".dump") || dump_path.ends_with(".backup");
+        // Detect dump format from magic bytes, not extension
+        let actual_path = self.decompress_if_needed(dump_path).await?;
+        let is_custom_format = self.detect_pg_dump_format(&actual_path)?;
+
+        info!(
+            "Detected dump format: {}",
+            if is_custom_format {
+                "custom/tar"
+            } else {
+                "plain SQL"
+            }
+        );
 
         let mut cmd = if is_custom_format {
             let mut c = Command::new("pg_restore");
@@ -77,7 +174,7 @@ impl DbAdapter for PostgresAdapter {
                 db_name,
                 "--no-owner",
                 "--no-privileges",
-                dump_path,
+                &actual_path,
             ]);
             c
         } else {
@@ -93,7 +190,7 @@ impl DbAdapter for PostgresAdapter {
                 "-d",
                 db_name,
                 "-f",
-                dump_path,
+                &actual_path,
             ]);
             c
         };

@@ -5,7 +5,7 @@ import { Inter } from 'next/font/google';
 const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
-  title: 'DB Viewer - Database Dump Visualization',
+  title: 'PgDumpLens - PostgreSQL Dump Visualization',
   description: 'Visualize database dumps with ER diagrams, relationship exploration, and risk assessment',
 };
 
@@ -28,7 +28,7 @@ export default function RootLayout({
                     </svg>
                   </div>
                   <span className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400 bg-clip-text text-transparent">
-                    DB Viewer
+                    PgDumpLens
                   </span>
                 </a>
                 <nav className="flex items-center space-x-1">
@@ -53,7 +53,7 @@ export default function RootLayout({
           </main>
           <footer className="border-t border-slate-200 dark:border-slate-700 mt-auto">
             <div className="max-w-7xl mx-auto px-4 py-6 sm:px-6 lg:px-8 text-center text-sm text-slate-500 dark:text-slate-400">
-              DB Viewer — Visualize your database relationships
+              PgDumpLens — Visualize your PostgreSQL database relationships
             </div>
           </footer>
         </div>

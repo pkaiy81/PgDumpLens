@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: frontend
-  namespace: db-viewer
+  namespace: pgdumplens
   labels:
     app: frontend
 spec:
@@ -17,7 +17,7 @@ spec:
     spec:
       containers:
         - name: frontend
-          image: db-viewer/frontend:latest
+          image: pgdumplens/frontend:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 3000
@@ -48,7 +48,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: frontend
-  namespace: db-viewer
+  namespace: pgdumplens
 spec:
   selector:
     app: frontend
