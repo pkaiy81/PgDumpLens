@@ -34,19 +34,15 @@ impl AppConfig {
                 .unwrap_or_else(|_| "8080".to_string())
                 .parse()
                 .context("Invalid PORT")?,
-            database_url: std::env::var("DATABASE_URL")
-                .context("DATABASE_URL is required")?,
-            sandbox_host: std::env::var("SANDBOX_HOST")
-                .unwrap_or_else(|_| "localhost".to_string()),
+            database_url: std::env::var("DATABASE_URL").context("DATABASE_URL is required")?,
+            sandbox_host: std::env::var("SANDBOX_HOST").unwrap_or_else(|_| "localhost".to_string()),
             sandbox_port: std::env::var("SANDBOX_PORT")
                 .unwrap_or_else(|_| "5432".to_string())
                 .parse()
                 .context("Invalid SANDBOX_PORT")?,
-            sandbox_user: std::env::var("SANDBOX_USER")
-                .unwrap_or_else(|_| "postgres".to_string()),
+            sandbox_user: std::env::var("SANDBOX_USER").unwrap_or_else(|_| "postgres".to_string()),
             sandbox_password: std::env::var("SANDBOX_PASSWORD").ok(),
-            upload_dir: std::env::var("UPLOAD_DIR")
-                .unwrap_or_else(|_| "/data/uploads".to_string()),
+            upload_dir: std::env::var("UPLOAD_DIR").unwrap_or_else(|_| "/data/uploads".to_string()),
             ttl_days: std::env::var("TTL_DAYS")
                 .unwrap_or_else(|_| "7".to_string())
                 .parse()
@@ -63,11 +59,11 @@ mod tests {
     fn test_config_defaults() {
         std::env::set_var("DATABASE_URL", "postgres://localhost/test");
         let config = AppConfig::from_env().unwrap();
-        
+
         assert_eq!(config.host, "0.0.0.0");
         assert_eq!(config.port, 8080);
         assert_eq!(config.ttl_days, 7);
-        
+
         std::env::remove_var("DATABASE_URL");
     }
 }

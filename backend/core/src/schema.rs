@@ -11,7 +11,7 @@ pub fn generate_mermaid_er(schema_graph: &SchemaGraph) -> String {
     for table in &schema_graph.tables {
         let full_name = format!("{}_{}", table.schema_name, table.table_name);
         output.push_str(&format!("    {} {{\n", full_name));
-        
+
         for col in &table.columns {
             let pk_marker = if col.is_primary_key { " PK" } else { "" };
             let nullable = if col.is_nullable { "" } else { " \"NOT NULL\"" };
@@ -30,7 +30,7 @@ pub fn generate_mermaid_er(schema_graph: &SchemaGraph) -> String {
     for fk in &schema_graph.foreign_keys {
         let source = format!("{}_{}", fk.source_schema, fk.source_table);
         let target = format!("{}_{}", fk.target_schema, fk.target_table);
-        
+
         // Mermaid cardinality notation
         // ||--o{ means one-to-many
         output.push_str(&format!(
@@ -64,7 +64,7 @@ pub fn find_related_tables(
     for fk in &schema_graph.foreign_keys {
         let source_key = (fk.source_schema.clone(), fk.source_table.clone());
         let target_key = (fk.target_schema.clone(), fk.target_table.clone());
-        
+
         outbound_fks.entry(source_key).or_default().push(fk);
         inbound_fks.entry(target_key).or_default().push(fk);
     }
@@ -84,7 +84,7 @@ pub fn find_related_tables(
                     visited.insert(next_key.clone());
                     let mut new_path = path.clone();
                     new_path.push(fk.constraint_name.clone());
-                    
+
                     result.push(RelatedTable {
                         schema: fk.target_schema.clone(),
                         table: fk.target_table.clone(),
@@ -92,7 +92,7 @@ pub fn find_related_tables(
                         path: new_path.clone(),
                         hop_count: depth + 1,
                     });
-                    
+
                     queue.push((next_key, depth + 1, new_path));
                 }
             }
@@ -106,7 +106,7 @@ pub fn find_related_tables(
                     visited.insert(next_key.clone());
                     let mut new_path = path.clone();
                     new_path.push(fk.constraint_name.clone());
-                    
+
                     result.push(RelatedTable {
                         schema: fk.source_schema.clone(),
                         table: fk.source_table.clone(),
@@ -114,7 +114,7 @@ pub fn find_related_tables(
                         path: new_path.clone(),
                         hop_count: depth + 1,
                     });
-                    
+
                     queue.push((next_key, depth + 1, new_path));
                 }
             }
@@ -146,19 +146,19 @@ pub enum RelationType {
 /// Filter schema graph by schemas
 pub fn filter_by_schemas(schema_graph: &SchemaGraph, schemas: &[&str]) -> SchemaGraph {
     let schema_set: HashSet<&str> = schemas.iter().copied().collect();
-    
+
     let tables: Vec<TableInfo> = schema_graph
         .tables
         .iter()
         .filter(|t| schema_set.contains(t.schema_name.as_str()))
         .cloned()
         .collect();
-    
+
     let table_set: HashSet<(String, String)> = tables
         .iter()
         .map(|t| (t.schema_name.clone(), t.table_name.clone()))
         .collect();
-    
+
     let foreign_keys: Vec<ForeignKey> = schema_graph
         .foreign_keys
         .iter()
@@ -168,8 +168,11 @@ pub fn filter_by_schemas(schema_graph: &SchemaGraph, schemas: &[&str]) -> Schema
         })
         .cloned()
         .collect();
-    
-    SchemaGraph { tables, foreign_keys }
+
+    SchemaGraph {
+        tables,
+        foreign_keys,
+    }
 }
 
 #[cfg(test)]
@@ -288,7 +291,7 @@ mod tests {
         let related = find_related_tables(&schema, "public", "orders", 1);
 
         assert_eq!(related.len(), 2);
-        
+
         let table_names: Vec<&str> = related.iter().map(|r| r.table.as_str()).collect();
         assert!(table_names.contains(&"users"));
         assert!(table_names.contains(&"order_items"));

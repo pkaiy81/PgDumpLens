@@ -13,7 +13,7 @@ impl SqlGenerator {
         limit: usize,
     ) -> String {
         let _source_cols = fk.source_columns.join(", ");
-        
+
         format!(
             r#"-- Rows in {}.{} that reference this value
 SELECT *
@@ -31,11 +31,7 @@ LIMIT {};"#,
     }
 
     /// Generate a JOIN query along a relationship path
-    pub fn generate_join_query(
-        fk: &ForeignKey,
-        value_placeholder: &str,
-        limit: usize,
-    ) -> String {
+    pub fn generate_join_query(fk: &ForeignKey, value_placeholder: &str, limit: usize) -> String {
         format!(
             r#"-- Join preview: {}.{} -> {}.{}
 SELECT 
@@ -202,13 +198,7 @@ mod tests {
     #[test]
     fn test_generate_delete_impact_query() {
         let fk = create_test_fk();
-        let sql = SqlGenerator::generate_delete_impact_query(
-            "public",
-            "users",
-            "id",
-            "$1",
-            &[&fk],
-        );
+        let sql = SqlGenerator::generate_delete_impact_query("public", "users", "id", "$1", &[&fk]);
 
         assert!(sql.contains("Impact analysis"));
         assert!(sql.contains("CASCADE"));

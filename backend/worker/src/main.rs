@@ -5,10 +5,10 @@
 mod config;
 mod jobs;
 
-use std::time::Duration;
-use tracing::{info, error};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 use sqlx::postgres::PgPool;
+use std::time::Duration;
+use tracing::{error, info};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use db_viewer_core::adapter::PostgresAdapter;
 
@@ -30,10 +30,10 @@ async fn main() -> anyhow::Result<()> {
 
     // Connect to metadata database
     let db_pool = PgPool::connect(&config.database_url).await?;
-    
+
     // Connect to sandbox postgres (for management operations)
     let sandbox_pool = PgPool::connect(&config.sandbox_url()).await?;
-    
+
     let adapter = PostgresAdapter::new(
         sandbox_pool,
         config.sandbox_host.clone(),

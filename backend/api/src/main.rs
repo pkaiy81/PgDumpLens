@@ -36,7 +36,7 @@ async fn main() -> anyhow::Result<()> {
     // Start server
     let addr: SocketAddr = format!("{}:{}", config.host, config.port).parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    
+
     axum::serve(listener, app).await?;
 
     Ok(())

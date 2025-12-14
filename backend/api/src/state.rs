@@ -1,8 +1,8 @@
 //! Application state
 
-use std::sync::Arc;
-use sqlx::postgres::PgPool;
 use anyhow::Result;
+use sqlx::postgres::PgPool;
+use std::sync::Arc;
 
 use crate::config::AppConfig;
 

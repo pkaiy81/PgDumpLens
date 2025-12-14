@@ -25,15 +25,33 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/dumps", get(handlers::dumps::list_dumps))
         .route("/api/dumps/:id", get(handlers::dumps::get_dump))
         .route("/api/dumps/:id/upload", put(handlers::dumps::upload_dump))
-        .route("/api/dumps/:id/restore", post(handlers::dumps::restore_dump))
+        .route(
+            "/api/dumps/:id/restore",
+            post(handlers::dumps::restore_dump),
+        )
         // Schema & Data
         .route("/api/dumps/:id/schema", get(handlers::schema::get_schema))
-        .route("/api/dumps/:id/tables/:table", get(handlers::schema::get_table_data))
-        .route("/api/dumps/:id/suggest", get(handlers::schema::suggest_values))
+        .route(
+            "/api/dumps/:id/tables/:table",
+            get(handlers::schema::get_table_data),
+        )
+        .route(
+            "/api/dumps/:id/suggest",
+            get(handlers::schema::suggest_values),
+        )
         // Relationships & Risk
-        .route("/api/dumps/:id/relation/explain", post(handlers::relation::explain_relation))
-        .route("/api/dumps/:id/risk/table/:schema/:table", get(handlers::risk::get_table_risk))
-        .route("/api/dumps/:id/risk/column/:schema/:table/:column", get(handlers::risk::get_column_risk))
+        .route(
+            "/api/dumps/:id/relation/explain",
+            post(handlers::relation::explain_relation),
+        )
+        .route(
+            "/api/dumps/:id/risk/table/:schema/:table",
+            get(handlers::risk::get_table_risk),
+        )
+        .route(
+            "/api/dumps/:id/risk/column/:schema/:table/:column",
+            get(handlers::risk::get_column_risk),
+        )
         // View by slug
         .route("/d/:slug", get(handlers::dumps::get_dump_by_slug))
         // Layers
