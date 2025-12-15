@@ -1,0 +1,147 @@
+# PgDumpLens - オフライン/制限環境向け Docker Compose 設定
+#
+# 使い方:
+# 1. GHCR からイメージを取得: docker pull ghcr.io/pkaiy81/pgdumplens/api:latest
+# 2. オフラインの場合: docker save/load でイメージを転送
+# 3. 起動: docker compose -f docker-compose.offline.yml up -d
+#
+# 詳細は README.md の「制限環境・オフライン環境向けデプロイ」を参照
+
+version: '3.8'
+
+services:
+  # ===========================================
+  # API サーバー (Rust/Axum)
+  # ===========================================
+  api:
+    image: ghcr.io/pkaiy81/pgdumplens/api:latest
+    container_name: pgdumplens-api
+    restart: unless-stopped
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8080
+      - DATABASE_URL=postgres://dbviewer:${DB_PASSWORD:-secret}@metadata-db:5432/dbviewer_metadata
+      - SANDBOX_HOST=sandbox-db
+      - SANDBOX_PORT=5432
+      - SANDBOX_USER=sandbox
+      - SANDBOX_PASSWORD=${SANDBOX_PASSWORD:-secret}
+      - DUMP_STORAGE_PATH=/dumps
+      - RUST_LOG=info
+    volumes:
+      - dump-files:/dumps
+    depends_on:
+      metadata-db:
+        condition: service_healthy
+      sandbox-db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - pgdumplens-net
+
+  # ===========================================
+  # フロントエンド (Next.js)
+  # ===========================================
+  frontend:
+    image: ghcr.io/pkaiy81/pgdumplens/frontend:latest
+    container_name: pgdumplens-frontend
+    restart: unless-stopped
+    environment:
+      - API_URL=http://api:8080
+    depends_on:
+      - api
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - pgdumplens-net
+
+  # ===========================================
+  # リバースプロキシ (Nginx)
+  # ===========================================
+  nginx:
+    image: nginx:alpine
+    container_name: pgdumplens-nginx
+    restart: unless-stopped
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api
+      - frontend
+    healthcheck:
+      test: ["CMD", "nginx", "-t"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - pgdumplens-net
+
+  # ===========================================
+  # メタデータ DB (PostgreSQL)
+  # ===========================================
+  metadata-db:
+    image: postgres:16-alpine
+    container_name: pgdumplens-metadata-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dbviewer
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+      POSTGRES_DB: dbviewer_metadata
+    volumes:
+      - metadata-data:/var/lib/postgresql/data
+      - ./backend/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dbviewer -d dbviewer_metadata"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pgdumplens-net
+
+  # ===========================================
+  # サンドボックス DB (PostgreSQL)
+  # ===========================================
+  sandbox-db:
+    image: postgres:16-alpine
+    container_name: pgdumplens-sandbox-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sandbox
+      POSTGRES_PASSWORD: ${SANDBOX_PASSWORD:-secret}
+      POSTGRES_DB: sandbox_template
+    volumes:
+      - sandbox-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sandbox -d sandbox_template"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - pgdumplens-net
+
+# ===========================================
+# ボリューム
+# ===========================================
+volumes:
+  metadata-data:
+    driver: local
+  sandbox-data:
+    driver: local
+  dump-files:
+    driver: local
+
+# ===========================================
+# ネットワーク
+# ===========================================
+networks:
+  pgdumplens-net:
+    driver: bridge

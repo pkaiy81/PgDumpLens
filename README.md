@@ -231,14 +231,185 @@ docker build -t pgdumplens-frontend ./frontend
 
 ### デプロイ方法の選択
 
-| 方法 | 用途 | 複雑さ |
-|------|------|--------|
-| Docker Compose | 個人利用・小規模チーム | ⭐ 簡単 |
-| Kubernetes | エンタープライズ・クラウド | ⭐⭐⭐ 複雑 |
+| 方法 | 用途 | 複雑さ | インターネット |
+|------|------|--------|----------------|
+| **GHCR イメージ使用** | 制限環境・オフライン | ⭐ 最も簡単 | 初回のみ |
+| Docker Compose (ビルド) | 開発・小規模 | ⭐⭐ 簡単 | 必要 |
+| Kubernetes | エンタープライズ | ⭐⭐⭐ 複雑 | 初回のみ |
 
-### Docker Compose デプロイ (推奨)
+---
 
-**個人利用・小規模チーム向け**。Linux サーバー1台で運用。
+### 🏢 制限環境・オフライン環境向けデプロイ（推奨）
+
+**npm/yarn/cargo が使えない環境、インターネット制限がある環境向け**
+
+CI/CD で自動ビルドされた Docker イメージを GitHub Container Registry (GHCR) から取得します。
+ソースコードのビルドは**不要**です。
+
+#### 前提条件
+
+- Docker Engine がインストール済み
+- GHCR (`ghcr.io`) への一時的なアクセス（イメージ取得時のみ）
+
+#### Step 1: Docker イメージを取得
+
+インターネットに接続できる環境で実行：
+
+```bash
+# PgDumpLens のイメージを取得
+docker pull ghcr.io/pkaiy81/pgdumplens/api:latest
+docker pull ghcr.io/pkaiy81/pgdumplens/frontend:latest
+
+# 依存イメージも取得
+docker pull postgres:16-alpine
+docker pull nginx:alpine
+```
+
+#### Step 2: オフライン環境向けエクスポート（必要な場合）
+
+エアギャップ環境などインターネット完全遮断の場合：
+
+```bash
+# イメージをファイルにエクスポート
+docker save ghcr.io/pkaiy81/pgdumplens/api:latest | gzip > pgdumplens-api.tar.gz
+docker save ghcr.io/pkaiy81/pgdumplens/frontend:latest | gzip > pgdumplens-frontend.tar.gz
+docker save postgres:16-alpine | gzip > postgres.tar.gz
+docker save nginx:alpine | gzip > nginx.tar.gz
+
+# ファイルサイズ確認（合計約 500MB 程度）
+ls -lh *.tar.gz
+```
+
+USB メモリや社内ファイルサーバー経由でオフライン環境に転送。
+
+#### Step 3: オフライン環境でインポート
+
+```bash
+# イメージをインポート
+gunzip -c pgdumplens-api.tar.gz | docker load
+gunzip -c pgdumplens-frontend.tar.gz | docker load
+gunzip -c postgres.tar.gz | docker load
+gunzip -c nginx.tar.gz | docker load
+
+# 確認
+docker images | grep -E "pgdumplens|postgres|nginx"
+```
+
+#### Step 4: docker-compose.offline.yml を作成
+
+```yaml
+# docker-compose.offline.yml
+version: '3.8'
+
+services:
+  api:
+    image: ghcr.io/pkaiy81/pgdumplens/api:latest
+    restart: unless-stopped
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8080
+      - DATABASE_URL=postgres://dbviewer:${DB_PASSWORD:-secret}@metadata-db:5432/dbviewer_metadata
+      - SANDBOX_HOST=sandbox-db
+      - SANDBOX_PORT=5432
+      - SANDBOX_USER=sandbox
+      - SANDBOX_PASSWORD=${SANDBOX_PASSWORD:-secret}
+      - DUMP_STORAGE_PATH=/dumps
+    volumes:
+      - dump-files:/dumps
+    depends_on:
+      - metadata-db
+      - sandbox-db
+    networks:
+      - pgdumplens-net
+
+  frontend:
+    image: ghcr.io/pkaiy81/pgdumplens/frontend:latest
+    restart: unless-stopped
+    environment:
+      - API_URL=http://api:8080
+    depends_on:
+      - api
+    networks:
+      - pgdumplens-net
+
+  nginx:
+    image: nginx:alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./deploy/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api
+      - frontend
+    networks:
+      - pgdumplens-net
+
+  metadata-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: dbviewer
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-secret}
+      POSTGRES_DB: dbviewer_metadata
+    volumes:
+      - metadata-data:/var/lib/postgresql/data
+    networks:
+      - pgdumplens-net
+
+  sandbox-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sandbox
+      POSTGRES_PASSWORD: ${SANDBOX_PASSWORD:-secret}
+      POSTGRES_DB: sandbox_template
+    volumes:
+      - sandbox-data:/var/lib/postgresql/data
+    networks:
+      - pgdumplens-net
+
+volumes:
+  metadata-data:
+  sandbox-data:
+  dump-files:
+
+networks:
+  pgdumplens-net:
+    driver: bridge
+```
+
+#### Step 5: 起動
+
+```bash
+# 環境変数を設定
+export DB_PASSWORD=your_secure_password
+export SANDBOX_PASSWORD=your_secure_password
+
+# 起動
+docker compose -f docker-compose.offline.yml up -d
+
+# 確認
+docker compose -f docker-compose.offline.yml ps
+curl http://localhost/health
+```
+
+#### 必要なファイル一覧（オフライン環境向け）
+
+| ファイル | 説明 | 必須 |
+|----------|------|------|
+| `pgdumplens-api.tar.gz` | API サーバーイメージ | ✅ |
+| `pgdumplens-frontend.tar.gz` | フロントエンドイメージ | ✅ |
+| `postgres.tar.gz` | PostgreSQL イメージ | ✅ |
+| `nginx.tar.gz` | Nginx イメージ | ✅ |
+| `docker-compose.offline.yml` | 起動設定 | ✅ |
+| `deploy/nginx/nginx.conf` | Nginx 設定 | ✅ |
+
+---
+
+### Docker Compose デプロイ (ソースビルド)
+
+**インターネット接続があり、ソースからビルドする場合**
 
 ```bash
 # 1. ソースコードをクローン
@@ -268,6 +439,8 @@ docker compose -f docker-compose.prod.yml logs -f api
 - Sandbox DB (PostgreSQL)
 - Nginx (リバースプロキシ)
 
+---
+
 ## ☸️ Kubernetes デプロイ
 
 **エンタープライズ・クラウド向け**。AWS EKS / GCP GKE / Azure AKS などで運用。
@@ -288,6 +461,30 @@ docker compose -f docker-compose.prod.yml logs -f api
 - 高可用性（99.9%+）が必要
 - オートスケーリングが必要
 - クラウドマネージドサービスを使用
+
+### オフライン/制限環境での Kubernetes デプロイ
+
+プライベートレジストリを使用してオフライン環境で Kubernetes にデプロイする方法です。
+
+```bash
+# 1. イメージを取得 (インターネット接続可能な環境で)
+docker pull ghcr.io/pkaiy81/pgdumplens/api:latest
+docker pull ghcr.io/pkaiy81/pgdumplens/frontend:latest
+
+# 2. プライベートレジストリにタグ付け
+docker tag ghcr.io/pkaiy81/pgdumplens/api:latest your-registry.local/pgdumplens/api:latest
+docker tag ghcr.io/pkaiy81/pgdumplens/frontend:latest your-registry.local/pgdumplens/frontend:latest
+
+# 3. プライベートレジストリにプッシュ
+docker push your-registry.local/pgdumplens/api:latest
+docker push your-registry.local/pgdumplens/frontend:latest
+
+# 4. Kubernetes マニフェストのイメージ名を変更
+# deploy/k8s/api.yaml と frontend.yaml の image: を編集
+#   image: ghcr.io/pkaiy81/pgdumplens/api:latest
+#   ↓
+#   image: your-registry.local/pgdumplens/api:latest
+```
 
 ### デプロイ手順
 
