@@ -3,7 +3,6 @@
 # ====================
 /backend/target/
 **/*.rs.bk
-Cargo.lock
 
 # ====================
 # Node.js / Next.js
