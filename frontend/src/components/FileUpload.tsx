@@ -134,14 +134,14 @@ export function FileUpload({ onUploadComplete }: FileUploadProps) {
               Drag and drop a PostgreSQL dump file here
             </p>
             <p className="text-sm text-slate-500 dark:text-slate-400 mb-6">
-              Supports .sql, .dump, .backup files up to 5GB
+              Supports .sql, .dump, .backup, .gz, .zip files up to 5GB
             </p>
             <label className="inline-flex items-center gap-2 px-6 py-3 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl cursor-pointer hover:from-indigo-600 hover:to-purple-700 transition-all duration-200 font-medium shadow-lg hover:shadow-xl">
               <FileUp className="w-5 h-5" />
               Select File
               <input
                 type="file"
-                accept=".sql,.dump,.backup"
+                accept=".sql,.dump,.backup,.gz,.zip"
                 onChange={handleFileSelect}
                 className="hidden"
               />
