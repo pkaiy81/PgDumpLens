@@ -59,7 +59,7 @@ export default function DumpDetailPage() {
 
   const fetchDump = useCallback(async () => {
     try {
-      const res = await fetch(`/d/${slug}`);
+      const res = await fetch(`/api/dumps/by-slug/${slug}`);
       if (!res.ok) {
         throw new Error('Dump not found');
       }

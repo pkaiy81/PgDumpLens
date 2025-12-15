@@ -60,7 +60,10 @@ pub fn create_router(state: AppState) -> Router {
             get(handlers::risk::get_column_risk),
         )
         // View by slug
-        .route("/d/:slug", get(handlers::dumps::get_dump_by_slug))
+        .route(
+            "/api/dumps/by-slug/:slug",
+            get(handlers::dumps::get_dump_by_slug),
+        )
         // Layers
         .layer(TraceLayer::new_for_http())
         .layer(cors)
