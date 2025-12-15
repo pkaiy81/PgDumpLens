@@ -1,6 +1,7 @@
 //! API route definitions
 
 use axum::{
+    extract::DefaultBodyLimit,
     routing::{get, post, put},
     Router,
 };
@@ -9,6 +10,9 @@ use tower_http::trace::TraceLayer;
 
 use crate::handlers;
 use crate::state::AppState;
+
+/// Maximum upload size: 5GB
+const MAX_UPLOAD_SIZE: usize = 5 * 1024 * 1024 * 1024;
 
 /// Create the main application router
 pub fn create_router(state: AppState) -> Router {
@@ -24,7 +28,10 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/dumps", post(handlers::dumps::create_dump))
         .route("/api/dumps", get(handlers::dumps::list_dumps))
         .route("/api/dumps/:id", get(handlers::dumps::get_dump))
-        .route("/api/dumps/:id/upload", put(handlers::dumps::upload_dump))
+        .route(
+            "/api/dumps/:id/upload",
+            put(handlers::dumps::upload_dump).layer(DefaultBodyLimit::max(MAX_UPLOAD_SIZE)),
+        )
         .route(
             "/api/dumps/:id/restore",
             post(handlers::dumps::restore_dump),
