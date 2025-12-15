@@ -1,60 +1,125 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { render, screen, waitFor } from '@testing-library/react';
 import { DataTable } from './DataTable';
 
+// Mock fetch
+const mockFetch = vi.fn();
+global.fetch = mockFetch;
+
 describe('DataTable', () => {
-  it('renders column headers', () => {
-    const columns = ['id', 'name', 'email'];
-    const rows: Record<string, unknown>[] = [];
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
 
-    render(<DataTable columns={columns} rows={rows} />);
+  it('shows loading state initially', () => {
+    mockFetch.mockImplementation(() => new Promise(() => {})); // Never resolves
 
-    expect(screen.getByText('id')).toBeInTheDocument();
+    render(<DataTable dumpId="123" schema="public" table="users" />);
+
+    // Should show loading spinner (checking for the loading div)
+    expect(document.querySelector('.animate-spin')).toBeInTheDocument();
+  });
+
+  it('renders column headers after loading', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        columns: ['id', 'name', 'email'],
+        rows: [{ id: 1, name: 'Test', email: 'test@example.com' }],
+        total_count: 1,
+      }),
+    });
+
+    render(<DataTable dumpId="123" schema="public" table="users" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('id')).toBeInTheDocument();
+    });
     expect(screen.getByText('name')).toBeInTheDocument();
     expect(screen.getByText('email')).toBeInTheDocument();
   });
 
-  it('renders row data', () => {
-    const columns = ['id', 'name'];
-    const rows = [
-      { id: 1, name: 'Alice' },
-      { id: 2, name: 'Bob' },
-    ];
+  it('renders row data', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        columns: ['id', 'name'],
+        rows: [
+          { id: 1, name: 'Alice' },
+          { id: 2, name: 'Bob' },
+        ],
+        total_count: 2,
+      }),
+    });
 
-    render(<DataTable columns={columns} rows={rows} />);
+    render(<DataTable dumpId="123" schema="public" table="users" />);
 
-    expect(screen.getByText('Alice')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('Alice')).toBeInTheDocument();
+    });
     expect(screen.getByText('Bob')).toBeInTheDocument();
   });
 
-  it('renders NULL for null values', () => {
-    const columns = ['id', 'name'];
-    const rows = [{ id: 1, name: null }];
+  it('renders NULL for null values', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        columns: ['id', 'name'],
+        rows: [{ id: 1, name: null }],
+        total_count: 1,
+      }),
+    });
 
-    render(<DataTable columns={columns} rows={rows} />);
+    render(<DataTable dumpId="123" schema="public" table="users" />);
 
-    expect(screen.getByText('NULL')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('NULL')).toBeInTheDocument();
+    });
   });
 
-  it('renders JSON for object values', () => {
-    const columns = ['id', 'metadata'];
-    const rows = [{ id: 1, metadata: { key: 'value' } }];
+  it('renders JSON for object values', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        columns: ['id', 'metadata'],
+        rows: [{ id: 1, metadata: { key: 'value' } }],
+        total_count: 1,
+      }),
+    });
 
-    render(<DataTable columns={columns} rows={rows} />);
+    render(<DataTable dumpId="123" schema="public" table="users" />);
 
-    expect(screen.getByText('{"key":"value"}')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('{"key":"value"}')).toBeInTheDocument();
+    });
   });
 
-  it('calls onCellClick when cell is clicked', async () => {
-    const columns = ['id', 'name'];
-    const rows = [{ id: 1, name: 'Alice' }];
-    const onCellClick = vi.fn();
+  it('shows error message on fetch failure', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: false,
+    });
 
-    render(<DataTable columns={columns} rows={rows} onCellClick={onCellClick} />);
+    render(<DataTable dumpId="123" schema="public" table="users" />);
 
-    const cell = screen.getByText('Alice');
-    cell.click();
+    await waitFor(() => {
+      expect(screen.getByText('Failed to load table data')).toBeInTheDocument();
+    });
+  });
 
-    expect(onCellClick).toHaveBeenCalledWith('name', 'Alice', { id: 1, name: 'Alice' });
+  it('shows no data message when table is empty', async () => {
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({
+        columns: ['id'],
+        rows: [],
+        total_count: 0,
+      }),
+    });
+
+    render(<DataTable dumpId="123" schema="public" table="users" />);
+
+    await waitFor(() => {
+      expect(screen.getByText('No data available')).toBeInTheDocument();
+    });
   });
 });
