@@ -1,16 +1,15 @@
 # Build stage
-FROM node:20-alpine3.21 AS builder
+FROM node:20-alpine AS builder
 
 RUN corepack enable
 
 WORKDIR /app
 
 # Copy package files
-COPY package.json yarn.lock .yarnrc.yml ./
-COPY .yarn ./.yarn
+COPY package.json yarn.lock ./
 
-# Install dependencies
-RUN yarn install --immutable
+# Install dependencies (using node-modules linker for Docker compatibility)
+RUN yarn config set nodeLinker node-modules && yarn install --immutable
 
 # Copy source code
 COPY . .
@@ -19,9 +18,7 @@ COPY . .
 RUN yarn build
 
 # Production stage
-FROM node:20-alpine3.21 AS runner
-
-RUN corepack enable
+FROM node:20-alpine AS runner
 
 WORKDIR /app
 
