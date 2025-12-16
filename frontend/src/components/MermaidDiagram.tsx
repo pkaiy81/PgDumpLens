@@ -6,9 +6,10 @@ import mermaid from 'mermaid';
 interface MermaidDiagramProps {
   chart: string;
   className?: string;
+  onExportSvg?: (svg: string) => void;
 }
 
-export function MermaidDiagram({ chart, className = '' }: MermaidDiagramProps) {
+export function MermaidDiagram({ chart, className = '', onExportSvg }: MermaidDiagramProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const svgContainerRef = useRef<HTMLDivElement>(null);
   const [svg, setSvg] = useState<string>('');
@@ -53,6 +54,61 @@ export function MermaidDiagram({ chart, className = '' }: MermaidDiagramProps) {
 
     renderDiagram();
   }, [chart]);
+
+  // Export SVG
+  const handleExportSvg = useCallback(() => {
+    if (!svg) return;
+    const blob = new Blob([svg], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'er-diagram.svg';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [svg]);
+
+  // Export PNG
+  const handleExportPng = useCallback(() => {
+    if (!svg) return;
+    const svgEl = svgContainerRef.current?.querySelector('svg');
+    if (!svgEl) return;
+    
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    
+    const svgData = new XMLSerializer().serializeToString(svgEl);
+    const img = new Image();
+    const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
+    const url = URL.createObjectURL(svgBlob);
+    
+    img.onload = () => {
+      canvas.width = img.width * 2;
+      canvas.height = img.height * 2;
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.scale(2, 2);
+      ctx.drawImage(img, 0, 0);
+      
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        const pngUrl = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = pngUrl;
+        a.download = 'er-diagram.png';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(pngUrl);
+      }, 'image/png');
+      
+      URL.revokeObjectURL(url);
+    };
+    
+    img.src = url;
+  }, [svg]);
 
   // Zoom handlers
   const zoomIn = useCallback(() => {
@@ -195,6 +251,24 @@ export function MermaidDiagram({ chart, className = '' }: MermaidDiagramProps) {
         </button>
 
         <div className="flex-1" />
+
+        {/* Export buttons */}
+        <div className="flex items-center gap-1 bg-white dark:bg-slate-700 rounded-lg p-1 shadow-sm">
+          <button
+            onClick={handleExportSvg}
+            className="px-2 py-1 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-600 rounded transition-colors"
+            title="Export as SVG"
+          >
+            SVG
+          </button>
+          <button
+            onClick={handleExportPng}
+            className="px-2 py-1 text-xs font-medium text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-600 rounded transition-colors"
+            title="Export as PNG"
+          >
+            PNG
+          </button>
+        </div>
 
         <button
           onClick={toggleFullscreen}

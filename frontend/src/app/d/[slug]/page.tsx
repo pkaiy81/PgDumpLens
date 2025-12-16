@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams } from 'next/navigation';
 import Link from 'next/link';
 import { DataTable } from '@/components/DataTable';
@@ -27,10 +27,12 @@ interface Column {
 
 interface ForeignKey {
   constraint_name: string;
-  column_name: string;
-  foreign_table_schema: string;
-  foreign_table_name: string;
-  foreign_column_name: string;
+  source_schema: string;
+  source_table: string;
+  source_columns: string[];
+  target_schema: string;
+  target_table: string;
+  target_columns: string[];
 }
 
 interface Table {
@@ -43,12 +45,46 @@ interface Table {
 
 interface SchemaGraph {
   tables: Table[];
-  foreign_keys: any[];
+  foreign_keys: ForeignKey[];
 }
 
 interface SchemaResponse {
   schema_graph: SchemaGraph;
   mermaid_er: string;
+}
+
+// Generate Mermaid ER diagram for filtered tables
+function generateFilteredMermaidER(tables: Table[], foreignKeys: ForeignKey[], selectedSchemas: Set<string>): string {
+  const filteredTables = tables.filter(t => selectedSchemas.has(t.schema_name));
+  const tableNames = new Set(filteredTables.map(t => `${t.schema_name}_${t.table_name}`));
+  
+  let output = 'erDiagram\n';
+  
+  // Generate entity definitions
+  for (const table of filteredTables) {
+    const fullName = `${table.schema_name}_${table.table_name}`;
+    output += `    ${fullName} {\n`;
+    
+    for (const col of table.columns) {
+      const pkMarker = col.is_primary_key ? ' PK' : '';
+      const nullable = col.is_nullable ? '' : ' "NOT NULL"';
+      const dataType = col.data_type.replace(/ /g, '_');
+      output += `        ${dataType} ${col.name}${pkMarker}${nullable}\n`;
+    }
+    output += '    }\n';
+  }
+  
+  // Generate relationships (only for visible tables)
+  for (const fk of foreignKeys) {
+    const source = `${fk.source_schema}_${fk.source_table}`;
+    const target = `${fk.target_schema}_${fk.target_table}`;
+    
+    if (tableNames.has(source) && tableNames.has(target)) {
+      output += `    ${target} ||--o{ ${source} : "${fk.constraint_name}"\n`;
+    }
+  }
+  
+  return output;
 }
 
 export default function DumpDetailPage() {
@@ -61,6 +97,63 @@ export default function DumpDetailPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<'schema' | 'data' | 'erd'>('erd');
+  const [selectedSchemas, setSelectedSchemas] = useState<Set<string>>(new Set());
+  const [showAllSchemas, setShowAllSchemas] = useState(false);
+
+  // Get unique schema names
+  const availableSchemas = useMemo(() => {
+    if (!schema) return [];
+    const schemas = new Set(schema.schema_graph.tables.map(t => t.schema_name));
+    return Array.from(schemas).sort();
+  }, [schema]);
+
+  // Initialize selected schemas when schema loads
+  useEffect(() => {
+    if (availableSchemas.length > 0 && selectedSchemas.size === 0) {
+      // Default to first schema or 'public' if available
+      const defaultSchema = availableSchemas.includes('public') ? 'public' : availableSchemas[0];
+      setSelectedSchemas(new Set([defaultSchema]));
+    }
+  }, [availableSchemas, selectedSchemas.size]);
+
+  // Generate filtered Mermaid ER
+  const filteredMermaidER = useMemo(() => {
+    if (!schema || selectedSchemas.size === 0) return '';
+    if (showAllSchemas) return schema.mermaid_er;
+    return generateFilteredMermaidER(
+      schema.schema_graph.tables,
+      schema.schema_graph.foreign_keys,
+      selectedSchemas
+    );
+  }, [schema, selectedSchemas, showAllSchemas]);
+
+  // Count tables per schema
+  const tableCountBySchema = useMemo(() => {
+    if (!schema) return {};
+    const counts: Record<string, number> = {};
+    for (const table of schema.schema_graph.tables) {
+      counts[table.schema_name] = (counts[table.schema_name] || 0) + 1;
+    }
+    return counts;
+  }, [schema]);
+
+  const toggleSchema = useCallback((schemaName: string) => {
+    setSelectedSchemas(prev => {
+      const next = new Set(prev);
+      if (next.has(schemaName)) {
+        next.delete(schemaName);
+      } else {
+        next.add(schemaName);
+      }
+      return next;
+    });
+    setShowAllSchemas(false);
+  }, []);
+
+  const selectAllSchemas = useCallback(() => {
+    setShowAllSchemas(true);
+    setSelectedSchemas(new Set(availableSchemas));
+  }, [availableSchemas]);
 
   const fetchDump = useCallback(async () => {
     try {
@@ -238,10 +331,70 @@ export default function DumpDetailPage() {
 
       {/* Content */}
       {activeTab === 'erd' && schema && (
-        <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-6">
-          <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Entity Relationship Diagram</h2>
-          <div className="overflow-auto">
-            <MermaidDiagram chart={schema.mermaid_er} />
+        <div className="space-y-4">
+          {/* Schema Filter */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-semibold text-slate-900 dark:text-white">
+                Filter by Schema
+              </h3>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={selectAllSchemas}
+                  className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors ${
+                    showAllSchemas
+                      ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
+                      : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600'
+                  }`}
+                >
+                  Show All ({schema.schema_graph.tables.length} tables)
+                </button>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {availableSchemas.map((schemaName) => (
+                <button
+                  key={schemaName}
+                  onClick={() => toggleSchema(schemaName)}
+                  className={`px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+                    selectedSchemas.has(schemaName) && !showAllSchemas
+                      ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 ring-2 ring-indigo-500'
+                      : showAllSchemas
+                      ? 'bg-indigo-50 text-indigo-600 dark:bg-indigo-900/20 dark:text-indigo-400'
+                      : 'bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600'
+                  }`}
+                >
+                  {schemaName}
+                  <span className="ml-1.5 text-xs opacity-70">({tableCountBySchema[schemaName] || 0})</span>
+                </button>
+              ))}
+            </div>
+            {selectedSchemas.size > 0 && !showAllSchemas && (
+              <p className="mt-2 text-xs text-slate-500 dark:text-slate-400">
+                Showing {schema.schema_graph.tables.filter(t => selectedSchemas.has(t.schema_name)).length} tables from selected schemas
+              </p>
+            )}
+          </div>
+
+          {/* ER Diagram */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-white">
+                Entity Relationship Diagram
+                {!showAllSchemas && selectedSchemas.size > 0 && (
+                  <span className="ml-2 text-sm font-normal text-slate-500">
+                    ({Array.from(selectedSchemas).join(', ')})
+                  </span>
+                )}
+              </h2>
+            </div>
+            {filteredMermaidER ? (
+              <MermaidDiagram chart={filteredMermaidER} />
+            ) : (
+              <p className="text-slate-500 dark:text-slate-400 text-center py-8">
+                Select at least one schema to view the ER diagram
+              </p>
+            )}
           </div>
         </div>
       )}
@@ -253,8 +406,26 @@ export default function DumpDetailPage() {
             <h3 className="text-sm font-semibold text-slate-900 dark:text-white mb-3">
               Tables ({schema.schema_graph.tables.length})
             </h3>
-            <div className="space-y-1 max-h-[600px] overflow-y-auto">
-              {schema.schema_graph.tables.map((table) => (
+            {/* Schema filter for table list */}
+            <div className="mb-3 flex flex-wrap gap-1">
+              {availableSchemas.map((schemaName) => (
+                <button
+                  key={schemaName}
+                  onClick={() => toggleSchema(schemaName)}
+                  className={`px-2 py-0.5 text-xs font-medium rounded transition-colors ${
+                    selectedSchemas.has(schemaName)
+                      ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
+                      : 'bg-slate-100 text-slate-500 dark:bg-slate-700 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-600'
+                  }`}
+                >
+                  {schemaName}
+                </button>
+              ))}
+            </div>
+            <div className="space-y-1 max-h-[550px] overflow-y-auto">
+              {schema.schema_graph.tables
+                .filter(table => selectedSchemas.size === 0 || selectedSchemas.has(table.schema_name))
+                .map((table) => (
                 <button
                   key={`${table.schema_name}.${table.table_name}`}
                   onClick={() => setSelectedTable(table)}
