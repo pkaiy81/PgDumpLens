@@ -1,6 +1,7 @@
 //! PostgreSQL adapter implementation
 
 use async_trait::async_trait;
+use flate2::read::GzDecoder;
 use sqlx::{postgres::PgPool, Row};
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -95,30 +96,19 @@ impl PostgresAdapter {
                 format!("{}.decompressed", dump_path)
             };
 
-            // Decompress using gzip command
-            let output = Command::new("gzip")
-                .args(["-dk", dump_path]) // -d = decompress, -k = keep original
-                .output()
-                .map_err(|e| {
-                    CoreError::RestoreFailed(format!("Failed to decompress gzip file: {}", e))
-                })?;
+            // Reopen file for decompression
+            let file = File::open(path).map_err(|e| {
+                CoreError::RestoreFailed(format!("Failed to open dump file: {}", e))
+            })?;
+            
+            let mut decoder = GzDecoder::new(file);
+            let mut output_file = File::create(&decompressed_path).map_err(|e| {
+                CoreError::RestoreFailed(format!("Failed to create decompressed file: {}", e))
+            })?;
 
-            if !output.status.success() {
-                // Try gunzip if gzip -d fails
-                let output2 = Command::new("gunzip")
-                    .args(["-k", dump_path])
-                    .output()
-                    .map_err(|e| {
-                        CoreError::RestoreFailed(format!("Failed to decompress with gunzip: {}", e))
-                    })?;
-
-                if !output2.status.success() {
-                    return Err(CoreError::RestoreFailed(format!(
-                        "Failed to decompress gzip: {}",
-                        String::from_utf8_lossy(&output2.stderr)
-                    )));
-                }
-            }
+            std::io::copy(&mut decoder, &mut output_file).map_err(|e| {
+                CoreError::RestoreFailed(format!("Failed to decompress gzip file: {}", e))
+            })?;
 
             info!("Decompressed to: {}", decompressed_path);
             return Ok(decompressed_path);
