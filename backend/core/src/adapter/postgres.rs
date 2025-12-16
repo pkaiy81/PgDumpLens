@@ -50,6 +50,21 @@ impl PostgresAdapter {
         }
     }
 
+    /// Build connection URL for a specific database
+    fn build_db_url(&self, db_name: &str) -> String {
+        if let Some(ref password) = self.password {
+            format!(
+                "postgres://{}:{}@{}:{}/{}",
+                self.user, password, self.host, self.port, db_name
+            )
+        } else {
+            format!(
+                "postgres://{}@{}:{}/{}",
+                self.user, self.host, self.port, db_name
+            )
+        }
+    }
+
     /// Parse FK action from PostgreSQL string
     fn parse_fk_action(action: &str) -> FkAction {
         match action.to_uppercase().as_str() {
@@ -233,10 +248,7 @@ impl DbAdapter for PostgresAdapter {
         "#;
 
         // Connect to the specific database
-        let db_url = format!(
-            "postgres://{}@{}:{}/{}",
-            self.user, self.host, self.port, db_name
-        );
+        let db_url = self.build_db_url(db_name);
         let db_pool = PgPool::connect(&db_url).await?;
 
         let rows = sqlx::query(query).fetch_all(&db_pool).await?;
@@ -287,10 +299,7 @@ impl DbAdapter for PostgresAdapter {
             ORDER BY tc.constraint_name, kcu.ordinal_position
         "#;
 
-        let db_url = format!(
-            "postgres://{}@{}:{}/{}",
-            self.user, self.host, self.port, db_name
-        );
+        let db_url = self.build_db_url(db_name);
         let db_pool = PgPool::connect(&db_url).await?;
 
         let rows = sqlx::query(query).fetch_all(&db_pool).await?;
@@ -335,10 +344,7 @@ impl DbAdapter for PostgresAdapter {
             ORDER BY schemaname, relname
         "#;
 
-        let db_url = format!(
-            "postgres://{}@{}:{}/{}",
-            self.user, self.host, self.port, db_name
-        );
+        let db_url = self.build_db_url(db_name);
         let db_pool = PgPool::connect(&db_url).await?;
 
         let rows = sqlx::query(query).fetch_all(&db_pool).await?;
@@ -364,10 +370,7 @@ impl DbAdapter for PostgresAdapter {
         table: &str,
         limit: usize,
     ) -> Result<Vec<serde_json::Value>> {
-        let db_url = format!(
-            "postgres://{}@{}:{}/{}",
-            self.user, self.host, self.port, db_name
-        );
+        let db_url = self.build_db_url(db_name);
         let db_pool = PgPool::connect(&db_url).await?;
 
         // Use quote_ident equivalent for safety
