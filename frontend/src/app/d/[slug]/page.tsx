@@ -41,9 +41,14 @@ interface Table {
   row_count: number | null;
 }
 
-interface Schema {
+interface SchemaGraph {
   tables: Table[];
-  mermaid_erd: string;
+  foreign_keys: any[];
+}
+
+interface SchemaResponse {
+  schema_graph: SchemaGraph;
+  mermaid_er: string;
 }
 
 export default function DumpDetailPage() {
@@ -51,7 +56,7 @@ export default function DumpDetailPage() {
   const slug = params.slug as string;
 
   const [dump, setDump] = useState<Dump | null>(null);
-  const [schema, setSchema] = useState<Schema | null>(null);
+  const [schema, setSchema] = useState<SchemaResponse | null>(null);
   const [selectedTable, setSelectedTable] = useState<Table | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -80,8 +85,8 @@ export default function DumpDetailPage() {
       }
       const data = await res.json();
       setSchema(data);
-      if (data.tables.length > 0) {
-        setSelectedTable(data.tables[0]);
+      if (data.schema_graph.tables.length > 0) {
+        setSelectedTable(data.schema_graph.tables[0]);
       }
     } catch (err) {
       console.error('Schema fetch error:', err);
@@ -236,7 +241,7 @@ export default function DumpDetailPage() {
         <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-6">
           <h2 className="text-lg font-semibold text-slate-900 dark:text-white mb-4">Entity Relationship Diagram</h2>
           <div className="overflow-auto">
-            <MermaidDiagram chart={schema.mermaid_erd} />
+            <MermaidDiagram chart={schema.mermaid_er} />
           </div>
         </div>
       )}
@@ -246,10 +251,10 @@ export default function DumpDetailPage() {
           {/* Table List */}
           <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-4">
             <h3 className="text-sm font-semibold text-slate-900 dark:text-white mb-3">
-              Tables ({schema.tables.length})
+              Tables ({schema.schema_graph.tables.length})
             </h3>
             <div className="space-y-1 max-h-[600px] overflow-y-auto">
-              {schema.tables.map((table) => (
+              {schema.schema_graph.tables.map((table) => (
                 <button
                   key={`${table.schema}.${table.name}`}
                   onClick={() => setSelectedTable(table)}
@@ -361,12 +366,12 @@ export default function DumpDetailPage() {
                 value={`${selectedTable.schema}.${selectedTable.name}`}
                 onChange={(e) => {
                   const [schemaName, tableName] = e.target.value.split('.');
-                  const found = schema.tables.find((t) => t.schema === schemaName && t.name === tableName);
+                  const found = schema.schema_graph.tables.find((t) => t.schema === schemaName && t.name === tableName);
                   if (found) setSelectedTable(found);
                 }}
                 className="px-3 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white"
               >
-                {schema.tables.map((table) => (
+                {schema.schema_graph.tables.map((table) => (
                   <option key={`${table.schema}.${table.name}`} value={`${table.schema}.${table.name}`}>
                     {table.schema}.{table.name}
                   </option>
