@@ -17,6 +17,7 @@ export function MermaidDiagram({ chart, className = '' }: MermaidDiagramProps) {
     mermaid.initialize({
       startOnLoad: false,
       theme: 'default',
+      maxTextSize: 500000, // Increase limit for large schemas
       er: {
         useMaxWidth: true,
         minEntityWidth: 100,

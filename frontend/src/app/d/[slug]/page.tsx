@@ -34,11 +34,11 @@ interface ForeignKey {
 }
 
 interface Table {
-  schema: string;
-  name: string;
+  schema_name: string;
+  table_name: string;
   columns: Column[];
-  foreign_keys: ForeignKey[];
-  row_count: number | null;
+  foreign_keys?: ForeignKey[];
+  estimated_row_count: number | null;
 }
 
 interface SchemaGraph {
@@ -256,18 +256,18 @@ export default function DumpDetailPage() {
             <div className="space-y-1 max-h-[600px] overflow-y-auto">
               {schema.schema_graph.tables.map((table) => (
                 <button
-                  key={`${table.schema}.${table.name}`}
+                  key={`${table.schema_name}.${table.table_name}`}
                   onClick={() => setSelectedTable(table)}
                   className={`w-full text-left px-3 py-2 rounded-lg text-sm transition-colors ${
-                    selectedTable?.name === table.name && selectedTable?.schema === table.schema
+                    selectedTable?.table_name === table.table_name && selectedTable?.schema_name === table.schema_name
                       ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300'
                       : 'text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700'
                   }`}
                 >
-                  <span className="text-slate-400 dark:text-slate-500">{table.schema}.</span>
-                  {table.name}
-                  {table.row_count !== null && (
-                    <span className="ml-2 text-xs text-slate-400">({table.row_count})</span>
+                  <span className="text-slate-400 dark:text-slate-500">{table.schema_name}.</span>
+                  {table.table_name}
+                  {table.estimated_row_count !== null && (
+                    <span className="ml-2 text-xs text-slate-400">({table.estimated_row_count})</span>
                   )}
                 </button>
               ))}
@@ -280,12 +280,12 @@ export default function DumpDetailPage() {
               <>
                 <div className="flex items-center justify-between mb-4">
                   <h3 className="text-lg font-semibold text-slate-900 dark:text-white">
-                    {selectedTable.schema}.{selectedTable.name}
+                    {selectedTable.schema_name}.{selectedTable.table_name}
                   </h3>
                   <RiskBadge 
                     dumpId={dump.id} 
-                    schema={selectedTable.schema} 
-                    table={selectedTable.name} 
+                    schema={selectedTable.schema_name} 
+                    table={selectedTable.table_name} 
                   />
                 </div>
 
@@ -363,23 +363,23 @@ export default function DumpDetailPage() {
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-4">
               <select
-                value={`${selectedTable.schema}.${selectedTable.name}`}
+                value={`${selectedTable.schema_name}.${selectedTable.table_name}`}
                 onChange={(e) => {
                   const [schemaName, tableName] = e.target.value.split('.');
-                  const found = schema.schema_graph.tables.find((t) => t.schema === schemaName && t.name === tableName);
+                  const found = schema.schema_graph.tables.find((t) => t.schema_name === schemaName && t.table_name === tableName);
                   if (found) setSelectedTable(found);
                 }}
                 className="px-3 py-2 bg-slate-100 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-slate-900 dark:text-white"
               >
                 {schema.schema_graph.tables.map((table) => (
-                  <option key={`${table.schema}.${table.name}`} value={`${table.schema}.${table.name}`}>
-                    {table.schema}.{table.name}
+                  <option key={`${table.schema_name}.${table.table_name}`} value={`${table.schema_name}.${table.table_name}`}>
+                    {table.schema_name}.{table.table_name}
                   </option>
                 ))}
               </select>
             </div>
           </div>
-          <DataTable dumpId={dump.id} schema={selectedTable.schema} table={selectedTable.name} />
+          <DataTable dumpId={dump.id} schema={selectedTable.schema_name} table={selectedTable.table_name} />
         </div>
       )}
     </div>
