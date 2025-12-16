@@ -220,13 +220,29 @@ impl DbAdapter for PostgresAdapter {
             for statement in sql_content.split(';') {
                 let trimmed = statement.trim();
                 
-                // Skip empty statements and comments
-                if trimmed.is_empty() || trimmed.starts_with("--") {
+                // Skip empty statements
+                if trimmed.is_empty() {
+                    continue;
+                }
+
+                // Remove leading comment lines (pg_dump metadata)
+                let mut cleaned = String::new();
+                for line in trimmed.lines() {
+                    let line_trimmed = line.trim();
+                    if !line_trimmed.starts_with("--") {
+                        cleaned.push_str(line);
+                        cleaned.push('\n');
+                    }
+                }
+                let cleaned = cleaned.trim();
+                
+                // Skip if nothing left after removing comments
+                if cleaned.is_empty() {
                     continue;
                 }
 
                 // Skip statements that should be ignored in restore context
-                let upper = trimmed.to_uppercase();
+                let upper = cleaned.to_uppercase();
                 if upper.starts_with("ALTER ROLE")
                     || upper.starts_with("CREATE ROLE")
                     || upper.starts_with("DROP ROLE")
@@ -240,7 +256,7 @@ impl DbAdapter for PostgresAdapter {
                 }
 
                 // Execute statement
-                match sqlx::query(trimmed).execute(&db_pool).await {
+                match sqlx::query(cleaned).execute(&db_pool).await {
                     Ok(_) => {
                         executed += 1;
                     }
@@ -254,14 +270,14 @@ impl DbAdapter for PostgresAdapter {
                             warn!(
                                 "Non-critical error (continuing): {} - Statement: {}",
                                 error_msg,
-                                trimmed.chars().take(100).collect::<String>()
+                                cleaned.chars().take(100).collect::<String>()
                             );
                             errors += 1;
                         } else {
                             // Critical error - fail restore
                             return Err(CoreError::RestoreFailed(format!(
                                 "Failed to execute SQL statement: {}. Error: {}",
-                                trimmed.chars().take(100).collect::<String>(),
+                                cleaned.chars().take(100).collect::<String>(),
                                 error_msg
                             )));
                         }
