@@ -201,7 +201,7 @@ impl DbAdapter for PostgresAdapter {
         } else {
             // Plain SQL format - execute directly with SQLx
             info!("Executing SQL file directly with SQLx");
-            
+
             let sql_content = tokio::fs::read_to_string(&actual_path)
                 .await
                 .map_err(|e| CoreError::RestoreFailed(format!("Failed to read SQL file: {}", e)))?;
@@ -219,17 +219,18 @@ impl DbAdapter for PostgresAdapter {
 
             for statement in sql_content.split(';') {
                 let trimmed = statement.trim();
-                
+
                 // Skip empty statements
                 if trimmed.is_empty() {
                     continue;
                 }
 
-                // Remove leading comment lines (pg_dump metadata)
+                // Remove leading comment lines (pg_dump metadata) and psql meta-commands
                 let mut cleaned = String::new();
                 for line in trimmed.lines() {
                     let line_trimmed = line.trim();
-                    if !line_trimmed.starts_with("--") {
+                    // Skip comment lines and psql meta-commands (starting with backslash)
+                    if !line_trimmed.starts_with("--") && !line_trimmed.starts_with("\\") {
                         cleaned.push_str(line);
                         cleaned.push('\n');
                     }
@@ -253,9 +254,7 @@ impl DbAdapter for PostgresAdapter {
                 {
                     skipped += 1;
                     continue;
-                }
-
-                // Execute statement
+                }                // Execute statement
                 match sqlx::query(cleaned).execute(&db_pool).await {
                     Ok(_) => {
                         executed += 1;
