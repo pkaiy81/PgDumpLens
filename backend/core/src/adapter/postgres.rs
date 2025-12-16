@@ -236,9 +236,20 @@ impl DbAdapter for PostgresAdapter {
                     }
                 }
                 let cleaned = cleaned.trim();
-                
+
                 // Skip if nothing left after removing comments
                 if cleaned.is_empty() {
+                    continue;
+                }
+
+                // Skip pg_dump metadata fragments (e.g., "Type: DATABASE" from split comment lines)
+                // These appear when comments like "-- Name: db; Type: DATABASE" are split by ';'
+                if cleaned.starts_with("Type:")
+                    || cleaned.starts_with("Owner:")
+                    || cleaned.starts_with("Schema:")
+                    || cleaned.starts_with("Name:")
+                    || cleaned.starts_with("Tablespace:")
+                {
                     continue;
                 }
 
@@ -254,7 +265,7 @@ impl DbAdapter for PostgresAdapter {
                 {
                     skipped += 1;
                     continue;
-                }                // Execute statement
+                } // Execute statement
                 match sqlx::query(cleaned).execute(&db_pool).await {
                     Ok(_) => {
                         executed += 1;
