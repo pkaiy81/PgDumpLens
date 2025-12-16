@@ -100,7 +100,7 @@ impl PostgresAdapter {
             let file = File::open(path).map_err(|e| {
                 CoreError::RestoreFailed(format!("Failed to open dump file: {}", e))
             })?;
-            
+
             let mut decoder = GzDecoder::new(file);
             let mut output_file = File::create(&decompressed_path).map_err(|e| {
                 CoreError::RestoreFailed(format!("Failed to create decompressed file: {}", e))
@@ -166,9 +166,10 @@ impl DbAdapter for PostgresAdapter {
             }
         );
 
-        let mut cmd = if is_custom_format {
-            let mut c = Command::new("pg_restore");
-            c.args([
+        if is_custom_format {
+            // Custom format - use pg_restore command
+            let mut cmd = Command::new("pg_restore");
+            cmd.args([
                 "-h",
                 &self.host,
                 "-p",
@@ -181,41 +182,61 @@ impl DbAdapter for PostgresAdapter {
                 "--no-privileges",
                 &actual_path,
             ]);
-            c
-        } else {
-            // SQL format - use psql
-            let mut c = Command::new("psql");
-            c.args([
-                "-h",
-                &self.host,
-                "-p",
-                &self.port.to_string(),
-                "-U",
-                &self.user,
-                "-d",
-                db_name,
-                "-f",
-                &actual_path,
-            ]);
-            c
-        };
 
-        // Set PGPASSWORD environment variable if password is provided
-        if let Some(ref password) = self.password {
-            cmd.env("PGPASSWORD", password);
-        }
-
-        let output = cmd.output().map_err(|e| {
-            CoreError::RestoreFailed(format!("Failed to execute restore command: {}", e))
-        })?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            // pg_restore may return non-zero for warnings, check for actual errors
-            if stderr.contains("ERROR") || stderr.contains("FATAL") {
-                return Err(CoreError::RestoreFailed(stderr.to_string()));
+            if let Some(ref password) = self.password {
+                cmd.env("PGPASSWORD", password);
             }
-            warn!("pg_restore completed with warnings: {}", stderr);
+
+            let output = cmd.output().map_err(|e| {
+                CoreError::RestoreFailed(format!("Failed to execute pg_restore: {}", e))
+            })?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                if stderr.contains("ERROR") || stderr.contains("FATAL") {
+                    return Err(CoreError::RestoreFailed(stderr.to_string()));
+                }
+                warn!("pg_restore completed with warnings: {}", stderr);
+            }
+        } else {
+            // Plain SQL format - execute directly with SQLx
+            info!("Executing SQL file directly with SQLx");
+            
+            let sql_content = tokio::fs::read_to_string(&actual_path)
+                .await
+                .map_err(|e| CoreError::RestoreFailed(format!("Failed to read SQL file: {}", e)))?;
+
+            let db_url = self.build_db_url(db_name);
+            let db_pool = PgPool::connect(&db_url).await.map_err(|e| {
+                CoreError::RestoreFailed(format!("Failed to connect to database: {}", e))
+            })?;
+
+            // Execute SQL in a transaction
+            let mut tx = db_pool.begin().await.map_err(|e| {
+                CoreError::RestoreFailed(format!("Failed to start transaction: {}", e))
+            })?;
+
+            // Split by semicolon and execute each statement
+            // Note: This is a simple implementation. For complex SQL with functions/procedures,
+            // you may need a more sophisticated parser.
+            for statement in sql_content.split(';') {
+                let trimmed = statement.trim();
+                if !trimmed.is_empty() && !trimmed.starts_with("--") {
+                    sqlx::query(trimmed).execute(&mut *tx).await.map_err(|e| {
+                        CoreError::RestoreFailed(format!(
+                            "Failed to execute SQL statement: {}. Error: {}",
+                            trimmed.chars().take(100).collect::<String>(),
+                            e
+                        ))
+                    })?;
+                }
+            }
+
+            tx.commit().await.map_err(|e| {
+                CoreError::RestoreFailed(format!("Failed to commit transaction: {}", e))
+            })?;
+
+            db_pool.close().await;
         }
 
         info!("Successfully restored dump to database {}", db_name);
