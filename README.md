@@ -84,7 +84,26 @@ cargo run --bin api-server
 
 API サーバーが <http://localhost:8080> で起動します。
 
-### 5. フロントエンドを起動
+### 5. Worker を起動（別ターミナル）
+
+Worker はダンプのリストアとスキーマ解析を非同期で処理します。
+
+```bash
+cd backend
+cargo run --bin worker
+```
+
+または、すべてのサービスを一度に起動する場合：
+
+```bash
+# API + Worker + Frontend を同時起動
+docker-compose up -d  # データベースのみ起動
+cd backend && cargo run --bin api-server &
+cd backend && cargo run --bin worker &
+cd frontend && yarn dev
+```
+
+### 6. フロントエンドを起動
 
 ```bash
 cd frontend
