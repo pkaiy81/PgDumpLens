@@ -211,30 +211,68 @@ impl DbAdapter for PostgresAdapter {
                 CoreError::RestoreFailed(format!("Failed to connect to database: {}", e))
             })?;
 
-            // Execute SQL in a transaction
-            let mut tx = db_pool.begin().await.map_err(|e| {
-                CoreError::RestoreFailed(format!("Failed to start transaction: {}", e))
-            })?;
+            // Don't use transaction - some commands like CREATE INDEX CONCURRENTLY can't run in transaction
+            // Execute each statement independently and continue on non-critical errors
+            let mut executed = 0;
+            let mut skipped = 0;
+            let mut errors = 0;
 
-            // Split by semicolon and execute each statement
-            // Note: This is a simple implementation. For complex SQL with functions/procedures,
-            // you may need a more sophisticated parser.
             for statement in sql_content.split(';') {
                 let trimmed = statement.trim();
-                if !trimmed.is_empty() && !trimmed.starts_with("--") {
-                    sqlx::query(trimmed).execute(&mut *tx).await.map_err(|e| {
-                        CoreError::RestoreFailed(format!(
-                            "Failed to execute SQL statement: {}. Error: {}",
-                            trimmed.chars().take(100).collect::<String>(),
-                            e
-                        ))
-                    })?;
+                
+                // Skip empty statements and comments
+                if trimmed.is_empty() || trimmed.starts_with("--") {
+                    continue;
+                }
+
+                // Skip statements that should be ignored in restore context
+                let upper = trimmed.to_uppercase();
+                if upper.starts_with("ALTER ROLE")
+                    || upper.starts_with("CREATE ROLE")
+                    || upper.starts_with("DROP ROLE")
+                    || upper.starts_with("GRANT")
+                    || upper.starts_with("REVOKE")
+                    || upper.contains("SET SESSION AUTHORIZATION")
+                    || upper.contains("SELECT PG_CATALOG.SET_CONFIG")
+                {
+                    skipped += 1;
+                    continue;
+                }
+
+                // Execute statement
+                match sqlx::query(trimmed).execute(&db_pool).await {
+                    Ok(_) => {
+                        executed += 1;
+                    }
+                    Err(e) => {
+                        let error_msg = e.to_string();
+                        // Ignore certain non-critical errors
+                        if error_msg.contains("already exists")
+                            || error_msg.contains("does not exist")
+                            || error_msg.contains("role")
+                        {
+                            warn!(
+                                "Non-critical error (continuing): {} - Statement: {}",
+                                error_msg,
+                                trimmed.chars().take(100).collect::<String>()
+                            );
+                            errors += 1;
+                        } else {
+                            // Critical error - fail restore
+                            return Err(CoreError::RestoreFailed(format!(
+                                "Failed to execute SQL statement: {}. Error: {}",
+                                trimmed.chars().take(100).collect::<String>(),
+                                error_msg
+                            )));
+                        }
+                    }
                 }
             }
 
-            tx.commit().await.map_err(|e| {
-                CoreError::RestoreFailed(format!("Failed to commit transaction: {}", e))
-            })?;
+            info!(
+                "SQL execution completed: {} statements executed, {} skipped, {} non-critical errors",
+                executed, skipped, errors
+            );
 
             db_pool.close().await;
         }
