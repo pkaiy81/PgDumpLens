@@ -323,7 +323,7 @@ export default function DumpDetailPage() {
                   </table>
                 </div>
 
-                {selectedTable.foreign_keys.length > 0 && (
+                {selectedTable.foreign_keys && selectedTable.foreign_keys.length > 0 && (
                   <>
                     <h4 className="text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Foreign Keys</h4>
                     <div className="overflow-x-auto">

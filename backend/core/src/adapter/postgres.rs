@@ -223,7 +223,7 @@ impl DbAdapter for PostgresAdapter {
             }
 
             let output = cmd.output();
-            
+
             match output {
                 Ok(output) => {
                     if !output.status.success() {
@@ -235,7 +235,10 @@ impl DbAdapter for PostgresAdapter {
                         warn!("psql completed with warnings: {}", stderr);
                     }
                     let stdout = String::from_utf8_lossy(&output.stdout);
-                    info!("psql output: {}", stdout.chars().take(500).collect::<String>());
+                    info!(
+                        "psql output: {}",
+                        stdout.chars().take(500).collect::<String>()
+                    );
                 }
                 Err(e) => {
                     // psql not available, fall back to SQLx line-by-line execution
@@ -514,10 +517,10 @@ impl PostgresAdapter {
 
         // Parse SQL more carefully, handling COPY blocks
         let mut current_statement = String::new();
-        
+
         for line in sql_content.lines() {
             let trimmed = line.trim();
-            
+
             // Handle COPY block end
             if in_copy_block {
                 if trimmed == "\\." {
@@ -528,32 +531,32 @@ impl PostgresAdapter {
                 }
                 continue;
             }
-            
+
             // Skip comments and psql meta-commands
             if trimmed.starts_with("--") || trimmed.starts_with("\\") {
                 continue;
             }
-            
+
             // Skip empty lines
             if trimmed.is_empty() {
                 continue;
             }
-            
+
             // Check for COPY command start
             if trimmed.to_uppercase().starts_with("COPY ") && trimmed.contains("FROM stdin") {
                 in_copy_block = true;
                 skipped += 1;
                 continue;
             }
-            
+
             // Accumulate statement
             current_statement.push_str(line);
             current_statement.push('\n');
-            
+
             // Check if statement is complete (ends with semicolon)
             if trimmed.ends_with(';') {
                 let stmt = current_statement.trim();
-                
+
                 // Skip certain statements
                 let upper = stmt.to_uppercase();
                 if upper.starts_with("ALTER ROLE")
@@ -570,7 +573,7 @@ impl PostgresAdapter {
                     current_statement.clear();
                     continue;
                 }
-                
+
                 // Execute statement
                 match sqlx::query(stmt).execute(&db_pool).await {
                     Ok(_) => executed += 1,
@@ -591,7 +594,7 @@ impl PostgresAdapter {
                         }
                     }
                 }
-                
+
                 current_statement.clear();
             }
         }
