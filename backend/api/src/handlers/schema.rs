@@ -59,6 +59,7 @@ pub async fn get_schema(
 #[derive(Debug, Deserialize)]
 #[allow(dead_code)]
 pub struct TableDataQuery {
+    pub schema: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
     pub filter: Option<String>,
@@ -82,12 +83,14 @@ pub async fn get_table_data(
     Path((id, table_path)): Path<(Uuid, String)>,
     Query(query): Query<TableDataQuery>,
 ) -> ApiResult<Json<TableDataResponse>> {
-    // Parse schema.table format
+    // Parse schema.table format or use query parameter
     let parts: Vec<&str> = table_path.split('.').collect();
     let (schema, table) = if parts.len() == 2 {
-        (parts[0], parts[1])
+        (parts[0].to_string(), parts[1].to_string())
     } else {
-        ("public", parts[0])
+        // Use query parameter for schema, default to "public"
+        let schema = query.schema.clone().unwrap_or_else(|| "public".to_string());
+        (schema, parts[0].to_string())
     };
 
     // Get sandbox database name
@@ -107,10 +110,24 @@ pub async fn get_table_data(
     let offset = query.offset.unwrap_or(0);
 
     // Connect to sandbox and fetch data
-    let sandbox_url = format!(
-        "postgres://{}@{}:{}/{}",
-        state.config.sandbox_user, state.config.sandbox_host, state.config.sandbox_port, sandbox_db
-    );
+    let sandbox_url = if let Some(ref password) = state.config.sandbox_password {
+        format!(
+            "postgres://{}:{}@{}:{}/{}",
+            state.config.sandbox_user,
+            password,
+            state.config.sandbox_host,
+            state.config.sandbox_port,
+            sandbox_db
+        )
+    } else {
+        format!(
+            "postgres://{}@{}:{}/{}",
+            state.config.sandbox_user,
+            state.config.sandbox_host,
+            state.config.sandbox_port,
+            sandbox_db
+        )
+    };
 
     let sandbox_pool = sqlx::postgres::PgPool::connect(&sandbox_url)
         .await
@@ -125,8 +142,8 @@ pub async fn get_table_data(
         ORDER BY ordinal_position
         "#,
     )
-    .bind(schema)
-    .bind(table)
+    .bind(&schema)
+    .bind(&table)
     .fetch_all(&sandbox_pool)
     .await?
     .iter()
@@ -158,8 +175,8 @@ pub async fn get_table_data(
         .collect();
 
     Ok(Json(TableDataResponse {
-        schema: schema.to_string(),
-        table: table.to_string(),
+        schema,
+        table,
         columns,
         rows,
         total_count,
@@ -214,10 +231,24 @@ pub async fn suggest_values(
         None => return Err(ApiError::NotFound(format!("Dump {} not found", id))),
     };
 
-    let sandbox_url = format!(
-        "postgres://{}@{}:{}/{}",
-        state.config.sandbox_user, state.config.sandbox_host, state.config.sandbox_port, sandbox_db
-    );
+    let sandbox_url = if let Some(ref password) = state.config.sandbox_password {
+        format!(
+            "postgres://{}:{}@{}:{}/{}",
+            state.config.sandbox_user,
+            password,
+            state.config.sandbox_host,
+            state.config.sandbox_port,
+            sandbox_db
+        )
+    } else {
+        format!(
+            "postgres://{}@{}:{}/{}",
+            state.config.sandbox_user,
+            state.config.sandbox_host,
+            state.config.sandbox_port,
+            sandbox_db
+        )
+    };
 
     let sandbox_pool = sqlx::postgres::PgPool::connect(&sandbox_url)
         .await
