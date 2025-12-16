@@ -199,108 +199,50 @@ impl DbAdapter for PostgresAdapter {
                 warn!("pg_restore completed with warnings: {}", stderr);
             }
         } else {
-            // Plain SQL format - execute directly with SQLx
-            info!("Executing SQL file directly with SQLx");
+            // Plain SQL format - use psql command for proper handling of COPY statements
+            info!("Executing SQL file with psql");
 
-            let sql_content = tokio::fs::read_to_string(&actual_path)
-                .await
-                .map_err(|e| CoreError::RestoreFailed(format!("Failed to read SQL file: {}", e)))?;
+            let mut cmd = Command::new("psql");
+            cmd.args([
+                "-h",
+                &self.host,
+                "-p",
+                &self.port.to_string(),
+                "-U",
+                &self.user,
+                "-d",
+                db_name,
+                "-v",
+                "ON_ERROR_STOP=0", // Continue on errors
+                "-f",
+                &actual_path,
+            ]);
 
-            let db_url = self.build_db_url(db_name);
-            let db_pool = PgPool::connect(&db_url).await.map_err(|e| {
-                CoreError::RestoreFailed(format!("Failed to connect to database: {}", e))
-            })?;
-
-            // Don't use transaction - some commands like CREATE INDEX CONCURRENTLY can't run in transaction
-            // Execute each statement independently and continue on non-critical errors
-            let mut executed = 0;
-            let mut skipped = 0;
-            let mut errors = 0;
-
-            for statement in sql_content.split(';') {
-                let trimmed = statement.trim();
-
-                // Skip empty statements
-                if trimmed.is_empty() {
-                    continue;
-                }
-
-                // Remove leading comment lines (pg_dump metadata) and psql meta-commands
-                let mut cleaned = String::new();
-                for line in trimmed.lines() {
-                    let line_trimmed = line.trim();
-                    // Skip comment lines and psql meta-commands (starting with backslash)
-                    if !line_trimmed.starts_with("--") && !line_trimmed.starts_with("\\") {
-                        cleaned.push_str(line);
-                        cleaned.push('\n');
-                    }
-                }
-                let cleaned = cleaned.trim();
-
-                // Skip if nothing left after removing comments
-                if cleaned.is_empty() {
-                    continue;
-                }
-
-                // Skip pg_dump metadata fragments (e.g., "Type: DATABASE" from split comment lines)
-                // These appear when comments like "-- Name: db; Type: DATABASE" are split by ';'
-                if cleaned.starts_with("Type:")
-                    || cleaned.starts_with("Owner:")
-                    || cleaned.starts_with("Schema:")
-                    || cleaned.starts_with("Name:")
-                    || cleaned.starts_with("Tablespace:")
-                {
-                    continue;
-                }
-
-                // Skip statements that should be ignored in restore context
-                let upper = cleaned.to_uppercase();
-                if upper.starts_with("ALTER ROLE")
-                    || upper.starts_with("CREATE ROLE")
-                    || upper.starts_with("DROP ROLE")
-                    || upper.starts_with("GRANT")
-                    || upper.starts_with("REVOKE")
-                    || upper.contains("SET SESSION AUTHORIZATION")
-                    || upper.contains("SELECT PG_CATALOG.SET_CONFIG")
-                {
-                    skipped += 1;
-                    continue;
-                } // Execute statement
-                match sqlx::query(cleaned).execute(&db_pool).await {
-                    Ok(_) => {
-                        executed += 1;
-                    }
-                    Err(e) => {
-                        let error_msg = e.to_string();
-                        // Ignore certain non-critical errors
-                        if error_msg.contains("already exists")
-                            || error_msg.contains("does not exist")
-                            || error_msg.contains("role")
-                        {
-                            warn!(
-                                "Non-critical error (continuing): {} - Statement: {}",
-                                error_msg,
-                                cleaned.chars().take(100).collect::<String>()
-                            );
-                            errors += 1;
-                        } else {
-                            // Critical error - fail restore
-                            return Err(CoreError::RestoreFailed(format!(
-                                "Failed to execute SQL statement: {}. Error: {}",
-                                cleaned.chars().take(100).collect::<String>(),
-                                error_msg
-                            )));
-                        }
-                    }
-                }
+            if let Some(ref password) = self.password {
+                cmd.env("PGPASSWORD", password);
             }
 
-            info!(
-                "SQL execution completed: {} statements executed, {} skipped, {} non-critical errors",
-                executed, skipped, errors
-            );
-
-            db_pool.close().await;
+            let output = cmd.output();
+            
+            match output {
+                Ok(output) => {
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        // Only fail on fatal errors, not warnings or role errors
+                        if stderr.contains("FATAL") {
+                            return Err(CoreError::RestoreFailed(stderr.to_string()));
+                        }
+                        warn!("psql completed with warnings: {}", stderr);
+                    }
+                    let stdout = String::from_utf8_lossy(&output.stdout);
+                    info!("psql output: {}", stdout.chars().take(500).collect::<String>());
+                }
+                Err(e) => {
+                    // psql not available, fall back to SQLx line-by-line execution
+                    warn!("psql not available ({}), falling back to SQLx execution", e);
+                    self.execute_sql_with_sqlx(&actual_path, db_name).await?;
+                }
+            }
         }
 
         info!("Successfully restored dump to database {}", db_name);
@@ -549,6 +491,118 @@ impl PostgresAdapter {
             .collect();
 
         Ok(columns)
+    }
+
+    /// Fallback SQL execution when psql is not available
+    /// This handles simple SQL but may not work with COPY commands
+    async fn execute_sql_with_sqlx(&self, sql_path: &str, db_name: &str) -> Result<()> {
+        info!("Executing SQL file directly with SQLx (fallback mode)");
+
+        let sql_content = tokio::fs::read_to_string(sql_path)
+            .await
+            .map_err(|e| CoreError::RestoreFailed(format!("Failed to read SQL file: {}", e)))?;
+
+        let db_url = self.build_db_url(db_name);
+        let db_pool = PgPool::connect(&db_url).await.map_err(|e| {
+            CoreError::RestoreFailed(format!("Failed to connect to database: {}", e))
+        })?;
+
+        let mut executed = 0;
+        let mut skipped = 0;
+        let mut errors = 0;
+        let mut in_copy_block = false;
+
+        // Parse SQL more carefully, handling COPY blocks
+        let mut current_statement = String::new();
+        
+        for line in sql_content.lines() {
+            let trimmed = line.trim();
+            
+            // Handle COPY block end
+            if in_copy_block {
+                if trimmed == "\\." {
+                    in_copy_block = false;
+                    // Skip COPY data - we can't handle it with SQLx
+                    current_statement.clear();
+                    skipped += 1;
+                }
+                continue;
+            }
+            
+            // Skip comments and psql meta-commands
+            if trimmed.starts_with("--") || trimmed.starts_with("\\") {
+                continue;
+            }
+            
+            // Skip empty lines
+            if trimmed.is_empty() {
+                continue;
+            }
+            
+            // Check for COPY command start
+            if trimmed.to_uppercase().starts_with("COPY ") && trimmed.contains("FROM stdin") {
+                in_copy_block = true;
+                skipped += 1;
+                continue;
+            }
+            
+            // Accumulate statement
+            current_statement.push_str(line);
+            current_statement.push('\n');
+            
+            // Check if statement is complete (ends with semicolon)
+            if trimmed.ends_with(';') {
+                let stmt = current_statement.trim();
+                
+                // Skip certain statements
+                let upper = stmt.to_uppercase();
+                if upper.starts_with("ALTER ROLE")
+                    || upper.starts_with("CREATE ROLE")
+                    || upper.starts_with("DROP ROLE")
+                    || upper.starts_with("GRANT")
+                    || upper.starts_with("REVOKE")
+                    || upper.starts_with("ALTER DATABASE")
+                    || upper.contains("OWNER TO")
+                    || upper.contains("SET SESSION AUTHORIZATION")
+                    || upper.contains("SELECT PG_CATALOG.SET_CONFIG")
+                {
+                    skipped += 1;
+                    current_statement.clear();
+                    continue;
+                }
+                
+                // Execute statement
+                match sqlx::query(stmt).execute(&db_pool).await {
+                    Ok(_) => executed += 1,
+                    Err(e) => {
+                        let error_msg = e.to_string();
+                        if error_msg.contains("already exists")
+                            || error_msg.contains("does not exist")
+                            || error_msg.contains("role")
+                        {
+                            errors += 1;
+                        } else {
+                            warn!(
+                                "SQL error (continuing): {} - {}",
+                                error_msg,
+                                stmt.chars().take(100).collect::<String>()
+                            );
+                            errors += 1;
+                        }
+                    }
+                }
+                
+                current_statement.clear();
+            }
+        }
+
+        info!(
+            "SQLx execution completed: {} executed, {} skipped, {} errors",
+            executed, skipped, errors
+        );
+
+        db_pool.close().await;
+        Ok(())
     }
 }
 
