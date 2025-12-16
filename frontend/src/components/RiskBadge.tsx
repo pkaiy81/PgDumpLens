@@ -1,11 +1,14 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import { RiskScore as RiskScoreType, RiskLevel } from '@/types';
 import { getRiskColor } from '@/lib/utils';
-import { AlertTriangle, Info, AlertCircle, XCircle } from 'lucide-react';
+import { AlertTriangle, Info, AlertCircle, XCircle, Loader2 } from 'lucide-react';
 
-interface RiskBadgeProps {
-  risk: RiskScoreType;
+export interface RiskBadgeProps {
+  dumpId: string;
+  schema: string;
+  table: string;
   showReasons?: boolean;
 }
 
@@ -23,7 +26,50 @@ const RiskIcon = ({ level }: { level: RiskLevel }) => {
   }
 };
 
-export function RiskBadge({ risk, showReasons = false }: RiskBadgeProps) {
+export function RiskBadge({ dumpId, schema, table, showReasons = false }: RiskBadgeProps) {
+  const [risk, setRisk] = useState<RiskScoreType | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchRisk = async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
+        const response = await fetch(`${apiBase}/api/dumps/${dumpId}/risk/table/${schema}/${table}`);
+        if (!response.ok) {
+          throw new Error('Failed to fetch risk');
+        }
+        const data = await response.json();
+        setRisk(data);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to fetch risk');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchRisk();
+  }, [dumpId, schema, table]);
+
+  if (loading) {
+    return (
+      <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-100 dark:bg-slate-700">
+        <Loader2 className="w-4 h-4 animate-spin" />
+        <span className="text-sm text-slate-500">Loading...</span>
+      </div>
+    );
+  }
+
+  if (error || !risk) {
+    return (
+      <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-slate-100 dark:bg-slate-700">
+        <span className="text-sm text-slate-500">N/A</span>
+      </div>
+    );
+  }
+
   const colorClass = getRiskColor(risk.level);
 
   return (
