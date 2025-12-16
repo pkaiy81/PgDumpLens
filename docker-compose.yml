@@ -39,6 +39,71 @@ services:
       timeout: 5s
       retries: 5
 
+  # API Server
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pgdumplens-api
+    command: ["/app/api-server"]
+    environment:
+      DATABASE_URL: postgres://dbviewer:dbviewer_dev@metadata-db:5432/dbviewer_metadata
+      SANDBOX_HOST: sandbox-db
+      SANDBOX_PORT: "5432"
+      SANDBOX_USER: sandbox
+      SANDBOX_PASSWORD: sandbox_dev
+      HOST: "0.0.0.0"
+      PORT: "8080"
+      UPLOAD_DIR: /data/uploads
+      RUST_LOG: info,db_viewer=debug
+    ports:
+      - "8080:8080"
+    volumes:
+      - uploads-data:/data/uploads
+    depends_on:
+      metadata-db:
+        condition: service_healthy
+      sandbox-db:
+        condition: service_healthy
+
+  # Worker - processes restore and analysis jobs
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: pgdumplens-worker
+    command: ["/app/worker"]
+    environment:
+      DATABASE_URL: postgres://dbviewer:dbviewer_dev@metadata-db:5432/dbviewer_metadata
+      SANDBOX_HOST: sandbox-db
+      SANDBOX_PORT: "5432"
+      SANDBOX_USER: sandbox
+      SANDBOX_PASSWORD: sandbox_dev
+      UPLOAD_DIR: /data/uploads
+      POLL_INTERVAL_SECS: "5"
+      RUST_LOG: info,db_viewer_worker=debug
+    volumes:
+      - uploads-data:/data/uploads
+    depends_on:
+      metadata-db:
+        condition: service_healthy
+      sandbox-db:
+        condition: service_healthy
+
+  # Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: pgdumplens-frontend
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8080
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
 volumes:
   metadata-data:
   sandbox-data:
+  uploads-data:

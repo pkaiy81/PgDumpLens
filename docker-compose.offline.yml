@@ -64,6 +64,33 @@ services:
       - pgdumplens-net
 
   # ===========================================
+  # バックグラウンドワーカー (ダンプのリストア・解析処理)
+  # ===========================================
+  worker:
+    image: ghcr.io/pkaiy81/pgdumplens/api:latest
+    container_name: pgdumplens-worker
+    command: ["/app/worker"]
+    restart: unless-stopped
+    environment:
+      - DATABASE_URL=postgres://dbviewer:${DB_PASSWORD:-secret}@metadata-db:5432/dbviewer_metadata
+      - SANDBOX_HOST=sandbox-db
+      - SANDBOX_PORT=5432
+      - SANDBOX_USER=sandbox
+      - SANDBOX_PASSWORD=${SANDBOX_PASSWORD:-secret}
+      - UPLOAD_DIR=/dumps
+      - POLL_INTERVAL_SECS=5
+      - RUST_LOG=info,db_viewer_worker=debug
+    volumes:
+      - dump-files:/dumps
+    depends_on:
+      metadata-db:
+        condition: service_healthy
+      sandbox-db:
+        condition: service_healthy
+    networks:
+      - pgdumplens-net
+
+  # ===========================================
   # リバースプロキシ (Nginx)
   # ===========================================
   nginx:
