@@ -76,6 +76,8 @@ build/
 # Data & Uploads
 # ====================
 /data/
+/dumps/*
+!/dumps/.gitkeep
 uploads/
 *.sql.gz
 *.dump
