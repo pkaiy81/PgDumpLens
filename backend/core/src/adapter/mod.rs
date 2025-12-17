@@ -15,7 +15,9 @@ pub use postgres::PostgresAdapter;
 #[async_trait]
 pub trait DbAdapter: Send + Sync {
     /// Restore a dump file into the sandbox database
-    async fn restore_dump(&self, dump_path: &str, db_name: &str) -> Result<()>;
+    /// Returns the actual database name where data was restored
+    /// (may differ from db_name for pg_dumpall format dumps)
+    async fn restore_dump(&self, dump_path: &str, db_name: &str) -> Result<String>;
 
     /// List all tables in the database
     async fn list_tables(&self, db_name: &str) -> Result<Vec<TableInfo>>;

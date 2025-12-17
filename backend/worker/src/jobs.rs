@@ -71,10 +71,13 @@ async fn process_restore<A: DbAdapter>(
     let dump_path = format!("{}/{}/dump.sql", config.upload_dir, dump_id);
     let sandbox_db_name = format!("sandbox_{}", dump_id.to_string().replace('-', "_"));
 
-    // Restore the dump
-    adapter.restore_dump(&dump_path, &sandbox_db_name).await?;
+    // Restore the dump - returns the actual database name where data was restored
+    // (may differ from sandbox_db_name for pg_dumpall format dumps)
+    let actual_db_name = adapter.restore_dump(&dump_path, &sandbox_db_name).await?;
 
-    // Update status to ANALYZING
+    info!("Data restored to database: {}", actual_db_name);
+
+    // Update status to ANALYZING with the actual database name
     sqlx::query(
         r#"
         UPDATE dumps
@@ -83,7 +86,7 @@ async fn process_restore<A: DbAdapter>(
         "#,
     )
     .bind(DumpStatus::Analyzing.as_str())
-    .bind(&sandbox_db_name)
+    .bind(&actual_db_name)
     .bind(Utc::now())
     .bind(dump_id)
     .execute(db_pool)

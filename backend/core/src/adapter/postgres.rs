@@ -143,24 +143,102 @@ impl PostgresAdapter {
         // but pg_restore handles both custom and tar the same way
         Ok(false)
     }
+
+    /// Detect if dump is from pg_dumpall (cluster dump) and extract database names
+    /// Returns a list of database names that will be created by the dump
+    fn detect_pg_dumpall_databases(&self, dump_path: &str) -> Result<Vec<String>> {
+        use std::io::BufRead;
+        
+        let path = Path::new(dump_path);
+        let file = File::open(path).map_err(|e| {
+            CoreError::RestoreFailed(format!("Failed to open dump file: {}", e))
+        })?;
+        let reader = BufReader::new(file);
+        
+        let mut databases = Vec::new();
+        let mut is_pg_dumpall = false;
+        
+        // Check first 100 lines for pg_dumpall signatures
+        for line in reader.lines().take(100) {
+            if let Ok(line) = line {
+                // pg_dumpall typically has "database cluster dump" comment
+                if line.contains("database cluster dump") {
+                    is_pg_dumpall = true;
+                }
+                // Check for CREATE ROLE statements (another pg_dumpall signature)
+                if line.starts_with("CREATE ROLE") {
+                    is_pg_dumpall = true;
+                }
+            }
+        }
+        
+        if !is_pg_dumpall {
+            return Ok(databases);
+        }
+        
+        // Re-read file to find all CREATE DATABASE statements
+        let file = File::open(path).map_err(|e| {
+            CoreError::RestoreFailed(format!("Failed to open dump file: {}", e))
+        })?;
+        let reader = BufReader::new(file);
+        
+        for line in reader.lines() {
+            if let Ok(line) = line {
+                // Match: CREATE DATABASE dbname WITH ...
+                if line.starts_with("CREATE DATABASE ") {
+                    let parts: Vec<&str> = line.split_whitespace().collect();
+                    if parts.len() >= 3 {
+                        let db_name = parts[2].trim_end_matches(';');
+                        // Skip template databases
+                        if db_name != "template0" && db_name != "template1" && db_name != "postgres" {
+                            databases.push(db_name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        
+        info!("Detected pg_dumpall format with databases: {:?}", databases);
+        Ok(databases)
+    }
 }
 
 #[async_trait]
 impl DbAdapter for PostgresAdapter {
-    async fn restore_dump(&self, dump_path: &str, db_name: &str) -> Result<()> {
+    async fn restore_dump(&self, dump_path: &str, db_name: &str) -> Result<String> {
         info!("Restoring dump {} to database {}", dump_path, db_name);
-
-        // Create database first
-        self.create_database(db_name).await?;
 
         // Detect dump format from magic bytes, not extension
         let actual_path = self.decompress_if_needed(dump_path).await?;
         let is_custom_format = self.detect_pg_dump_format(&actual_path)?;
 
+        // Check if this is a pg_dumpall format (cluster dump)
+        let pg_dumpall_databases = if !is_custom_format {
+            self.detect_pg_dumpall_databases(&actual_path)?
+        } else {
+            Vec::new()
+        };
+
+        // Determine the actual database name where data will be stored
+        let actual_db_name = if !pg_dumpall_databases.is_empty() {
+            // For pg_dumpall, use the first non-system database found
+            info!("pg_dumpall format detected, databases in dump: {:?}", pg_dumpall_databases);
+            pg_dumpall_databases[0].clone()
+        } else {
+            db_name.to_string()
+        };
+
+        // Create database first (only for non-pg_dumpall dumps)
+        if pg_dumpall_databases.is_empty() {
+            self.create_database(db_name).await?;
+        }
+
         info!(
             "Detected dump format: {}",
             if is_custom_format {
                 "custom/tar"
+            } else if !pg_dumpall_databases.is_empty() {
+                "pg_dumpall (cluster)"
             } else {
                 "plain SQL"
             }
@@ -202,6 +280,14 @@ impl DbAdapter for PostgresAdapter {
             // Plain SQL format - use psql command for proper handling of COPY statements
             info!("Executing SQL file with psql");
 
+            // For pg_dumpall format, connect to postgres database (default)
+            // The dump itself will create and connect to the target databases
+            let connect_db = if !pg_dumpall_databases.is_empty() {
+                "postgres"
+            } else {
+                db_name
+            };
+
             let mut cmd = Command::new("psql");
             cmd.args([
                 "-h",
@@ -211,7 +297,7 @@ impl DbAdapter for PostgresAdapter {
                 "-U",
                 &self.user,
                 "-d",
-                db_name,
+                connect_db,
                 "-v",
                 "ON_ERROR_STOP=0", // Continue on errors
                 "-f",
@@ -248,8 +334,8 @@ impl DbAdapter for PostgresAdapter {
             }
         }
 
-        info!("Successfully restored dump to database {}", db_name);
-        Ok(())
+        info!("Successfully restored dump to database {}", actual_db_name);
+        Ok(actual_db_name)
     }
 
     async fn list_tables(&self, db_name: &str) -> Result<Vec<TableInfo>> {
