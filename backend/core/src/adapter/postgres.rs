@@ -188,10 +188,7 @@ impl PostgresAdapter {
                     if parts.len() >= 3 {
                         let db_name = parts[2].trim_end_matches(';');
                         // Skip template databases
-                        if db_name != "template0"
-                            && db_name != "template1"
-                            && db_name != "postgres"
-                        {
+                        if db_name != "template0" && db_name != "template1" && db_name != "postgres" {
                             databases.push(db_name.to_string());
                         }
                     }
