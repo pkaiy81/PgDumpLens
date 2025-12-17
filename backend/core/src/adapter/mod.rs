@@ -67,7 +67,7 @@ mod tests {
 
         #[async_trait]
         impl DbAdapter for TestAdapter {
-            async fn restore_dump(&self, dump_path: &str, db_name: &str) -> Result<()>;
+            async fn restore_dump(&self, dump_path: &str, db_name: &str) -> Result<String>;
             async fn list_tables(&self, db_name: &str) -> Result<Vec<TableInfo>>;
             async fn list_foreign_keys(&self, db_name: &str) -> Result<Vec<ForeignKey>>;
             async fn build_schema_graph(&self, db_name: &str) -> Result<SchemaGraph>;

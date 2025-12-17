@@ -158,16 +158,14 @@ impl PostgresAdapter {
         let mut is_pg_dumpall = false;
 
         // Check first 100 lines for pg_dumpall signatures
-        for line in reader.lines().take(100) {
-            if let Ok(line) = line {
-                // pg_dumpall typically has "database cluster dump" comment
-                if line.contains("database cluster dump") {
-                    is_pg_dumpall = true;
-                }
-                // Check for CREATE ROLE statements (another pg_dumpall signature)
-                if line.starts_with("CREATE ROLE") {
-                    is_pg_dumpall = true;
-                }
+        for line in reader.lines().take(100).map_while(|r| r.ok()) {
+            // pg_dumpall typically has "database cluster dump" comment
+            if line.contains("database cluster dump") {
+                is_pg_dumpall = true;
+            }
+            // Check for CREATE ROLE statements (another pg_dumpall signature)
+            if line.starts_with("CREATE ROLE") {
+                is_pg_dumpall = true;
             }
         }
 
@@ -180,18 +178,15 @@ impl PostgresAdapter {
             .map_err(|e| CoreError::RestoreFailed(format!("Failed to open dump file: {}", e)))?;
         let reader = BufReader::new(file);
 
-        for line in reader.lines() {
-            if let Ok(line) = line {
-                // Match: CREATE DATABASE dbname WITH ...
-                if line.starts_with("CREATE DATABASE ") {
-                    let parts: Vec<&str> = line.split_whitespace().collect();
-                    if parts.len() >= 3 {
-                        let db_name = parts[2].trim_end_matches(';');
-                        // Skip template databases
-                        if db_name != "template0" && db_name != "template1" && db_name != "postgres"
-                        {
-                            databases.push(db_name.to_string());
-                        }
+        for line in reader.lines().map_while(|r| r.ok()) {
+            // Match: CREATE DATABASE dbname WITH ...
+            if line.starts_with("CREATE DATABASE ") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 3 {
+                    let db_name = parts[2].trim_end_matches(';');
+                    // Skip template databases
+                    if db_name != "template0" && db_name != "template1" && db_name != "postgres" {
+                        databases.push(db_name.to_string());
                     }
                 }
             }
