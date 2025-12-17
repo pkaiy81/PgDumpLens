@@ -36,6 +36,10 @@ pub fn create_router(state: AppState) -> Router {
             "/api/dumps/:id/restore",
             post(handlers::dumps::restore_dump),
         )
+        .route(
+            "/api/dumps/:id/databases",
+            get(handlers::dumps::get_dump_databases),
+        )
         // Schema & Data
         .route("/api/dumps/:id/schema", get(handlers::schema::get_schema))
         .route(

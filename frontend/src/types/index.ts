@@ -101,3 +101,8 @@ export interface TableDataResponse {
   limit: number;
   offset: number;
 }
+
+export interface DatabaseListResponse {
+  databases: string[];
+  primary: string | null;
+}

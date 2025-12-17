@@ -312,6 +312,48 @@ fn generate_short_id() -> String {
     id.to_string()[..8].to_string()
 }
 
+/// Response for sandbox databases list
+#[derive(Debug, Serialize)]
+pub struct DatabaseListResponse {
+    pub databases: Vec<String>,
+    pub primary: Option<String>,
+}
+
+/// Get list of databases available in a dump
+pub async fn get_dump_databases(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<DatabaseListResponse>> {
+    let row = sqlx::query(
+        r#"
+        SELECT sandbox_db_name, sandbox_databases
+        FROM dumps
+        WHERE id = $1 AND status IN ('ANALYZING', 'READY')
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await?;
+
+    match row {
+        Some(row) => {
+            let primary: Option<String> = row.get("sandbox_db_name");
+            let databases: Option<Vec<String>> = row.get("sandbox_databases");
+
+            let databases = databases.unwrap_or_else(|| {
+                // Fallback to primary database if sandbox_databases is not set
+                primary.clone().map_or(vec![], |p| vec![p])
+            });
+
+            Ok(Json(DatabaseListResponse { databases, primary }))
+        }
+        None => Err(ApiError::NotFound(format!(
+            "Dump {} not found or not ready",
+            id
+        ))),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

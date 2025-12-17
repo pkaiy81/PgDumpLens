@@ -11,6 +11,8 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use db_viewer_core::adapter::postgres::PostgresAdapter;
+use db_viewer_core::adapter::DbAdapter;
 use db_viewer_core::domain::SchemaGraph;
 use db_viewer_core::schema::generate_mermaid_er;
 
@@ -21,12 +23,96 @@ pub struct SchemaResponse {
     pub mermaid_er: String,
 }
 
+/// Schema query parameters
+#[derive(Debug, Deserialize)]
+pub struct SchemaQuery {
+    /// Optional database name for pg_dumpall dumps with multiple databases
+    pub database: Option<String>,
+}
+
 /// Get schema for a dump
 pub async fn get_schema(
     State(state): State<AppState>,
     Path(id): Path<Uuid>,
+    Query(query): Query<SchemaQuery>,
 ) -> ApiResult<Json<SchemaResponse>> {
-    // Fetch cached schema from metadata DB
+    // If a specific database is requested, build schema live from sandbox
+    if let Some(ref requested_db) = query.database {
+        // Verify this database is available for this dump
+        let dump_row = sqlx::query(
+            r#"
+            SELECT sandbox_databases, sandbox_db_name
+            FROM dumps
+            WHERE id = $1 AND status = 'READY'
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&state.db_pool)
+        .await?;
+
+        let row = dump_row
+            .ok_or_else(|| ApiError::NotFound(format!("Dump {} not found or not ready", id)))?;
+
+        let available_dbs: Option<Vec<String>> = row.get("sandbox_databases");
+        let primary_db: Option<String> = row.get("sandbox_db_name");
+
+        // Check if requested database is available
+        let available = available_dbs
+            .as_ref()
+            .map(|dbs| dbs.contains(requested_db))
+            .unwrap_or(false)
+            || primary_db.as_ref() == Some(requested_db);
+
+        if !available {
+            return Err(ApiError::BadRequest(format!(
+                "Database '{}' is not available for this dump. Available: {:?}",
+                requested_db,
+                available_dbs.unwrap_or_else(|| primary_db.map_or(vec![], |p| vec![p]))
+            )));
+        }
+
+        // Create PostgresAdapter to build schema graph live from sandbox
+        // First, connect to the template database to create the adapter
+        let template_url = if let Some(ref password) = state.config.sandbox_password {
+            format!(
+                "postgres://{}:{}@{}:{}/postgres",
+                state.config.sandbox_user,
+                password,
+                state.config.sandbox_host,
+                state.config.sandbox_port
+            )
+        } else {
+            format!(
+                "postgres://{}@{}:{}/postgres",
+                state.config.sandbox_user, state.config.sandbox_host, state.config.sandbox_port
+            )
+        };
+
+        let sandbox_pool = sqlx::postgres::PgPool::connect(&template_url)
+            .await
+            .map_err(|e| ApiError::Internal(format!("Failed to connect to sandbox: {}", e)))?;
+
+        let adapter = PostgresAdapter::new(
+            sandbox_pool,
+            state.config.sandbox_host.clone(),
+            state.config.sandbox_port,
+            state.config.sandbox_user.clone(),
+            state.config.sandbox_password.clone(),
+        );
+
+        let schema_graph = adapter
+            .build_schema_graph(requested_db)
+            .await
+            .map_err(|e| ApiError::Internal(format!("Failed to build schema: {}", e)))?;
+        let mermaid_er = generate_mermaid_er(&schema_graph);
+
+        return Ok(Json(SchemaResponse {
+            schema_graph,
+            mermaid_er,
+        }));
+    }
+
+    // Fetch cached schema from metadata DB (default behavior)
     let row = sqlx::query(
         r#"
         SELECT schema_graph
@@ -63,6 +149,8 @@ pub struct TableDataQuery {
     pub limit: Option<usize>,
     pub offset: Option<usize>,
     pub filter: Option<String>,
+    /// Optional database name for pg_dumpall dumps with multiple databases
+    pub database: Option<String>,
 }
 
 /// Table data response
@@ -93,18 +181,45 @@ pub async fn get_table_data(
         (schema, parts[0].to_string())
     };
 
-    // Get sandbox database name
-    let dump_row = sqlx::query("SELECT sandbox_db_name FROM dumps WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&state.db_pool)
-        .await?;
+    // Get sandbox database name - use query.database if specified, otherwise fallback to sandbox_db_name
+    let dump_row =
+        sqlx::query("SELECT sandbox_db_name, sandbox_databases FROM dumps WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db_pool)
+            .await?;
 
-    let sandbox_db: String = match dump_row {
-        Some(row) => row
-            .get::<Option<String>, _>("sandbox_db_name")
-            .ok_or_else(|| ApiError::BadRequest("Dump not restored yet".to_string()))?,
+    let (sandbox_db, available_dbs): (String, Option<Vec<String>>) = match dump_row {
+        Some(row) => {
+            let primary_db: Option<String> = row.get("sandbox_db_name");
+            let available_dbs: Option<Vec<String>> = row.get("sandbox_databases");
+
+            // Use query parameter if provided, otherwise default to primary
+            let db = if let Some(ref requested_db) = query.database {
+                // Verify the requested database is available
+                let is_available = available_dbs
+                    .as_ref()
+                    .map(|dbs| dbs.contains(requested_db))
+                    .unwrap_or(false)
+                    || primary_db.as_ref() == Some(requested_db);
+
+                if !is_available {
+                    return Err(ApiError::BadRequest(format!(
+                        "Database '{}' is not available for this dump",
+                        requested_db
+                    )));
+                }
+                requested_db.clone()
+            } else {
+                primary_db
+                    .ok_or_else(|| ApiError::BadRequest("Dump not restored yet".to_string()))?
+            };
+
+            (db, available_dbs)
+        }
         None => return Err(ApiError::NotFound(format!("Dump {} not found", id))),
     };
+
+    let _ = available_dbs; // Suppress unused warning
 
     let limit = query.limit.unwrap_or(50).min(1000);
     let offset = query.offset.unwrap_or(0);

@@ -39,6 +39,7 @@ interface SchemaExplorerProps {
   dumpId: string;
   schemaGraph: SchemaGraph;
   fullMermaidER: string;
+  selectedDatabase?: string;
 }
 
 type ViewMode = 'tables' | 'relationships' | 'columns' | 'table-detail' | 'data';
@@ -154,7 +155,7 @@ function generateTableRelationshipER(
   return output;
 }
 
-export function SchemaExplorer({ dumpId, schemaGraph, fullMermaidER }: SchemaExplorerProps) {
+export function SchemaExplorer({ dumpId, schemaGraph, fullMermaidER, selectedDatabase }: SchemaExplorerProps) {
   const [viewMode, setViewMode] = useState<ViewMode>('tables');
   const [selectedSchema, setSelectedSchema] = useState<string | null>(null);
   const [selectedTable, setSelectedTable] = useState<Table | null>(null);
@@ -688,7 +689,7 @@ export function SchemaExplorer({ dumpId, schemaGraph, fullMermaidER }: SchemaExp
                 </select>
               </div>
               {selectedTable ? (
-                <DataTable dumpId={dumpId} schema={selectedTable.schema_name} table={selectedTable.table_name} />
+                <DataTable dumpId={dumpId} schema={selectedTable.schema_name} table={selectedTable.table_name} database={selectedDatabase} />
               ) : (
                 <p className="text-center py-8 text-slate-500 dark:text-slate-400">
                   Select a table to view its data

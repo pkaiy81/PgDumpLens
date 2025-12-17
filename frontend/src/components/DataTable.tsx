@@ -6,6 +6,7 @@ interface DataTableProps {
   dumpId: string;
   schema: string;
   table: string;
+  database?: string;
   onCellClick?: (column: string, value: unknown, row: Record<string, unknown>) => void;
 }
 
@@ -15,7 +16,7 @@ interface TableData {
   total_count: number;
 }
 
-export function DataTable({ dumpId, schema, table, onCellClick }: DataTableProps) {
+export function DataTable({ dumpId, schema, table, database, onCellClick }: DataTableProps) {
   const [data, setData] = useState<TableData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -27,9 +28,11 @@ export function DataTable({ dumpId, schema, table, onCellClick }: DataTableProps
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch(
-          `/api/dumps/${dumpId}/tables/${table}?schema=${encodeURIComponent(schema)}&limit=${pageSize}&offset=${page * pageSize}`
-        );
+        let url = `/api/dumps/${dumpId}/tables/${table}?schema=${encodeURIComponent(schema)}&limit=${pageSize}&offset=${page * pageSize}`;
+        if (database) {
+          url += `&database=${encodeURIComponent(database)}`;
+        }
+        const res = await fetch(url);
         if (!res.ok) {
           throw new Error('Failed to load table data');
         }
@@ -43,7 +46,7 @@ export function DataTable({ dumpId, schema, table, onCellClick }: DataTableProps
     };
 
     fetchData();
-  }, [dumpId, schema, table, page]);
+  }, [dumpId, schema, table, database, page]);
 
   if (loading) {
     return (

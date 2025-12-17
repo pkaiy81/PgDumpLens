@@ -71,22 +71,33 @@ async fn process_restore<A: DbAdapter>(
     let dump_path = format!("{}/{}/dump.sql", config.upload_dir, dump_id);
     let sandbox_db_name = format!("sandbox_{}", dump_id.to_string().replace('-', "_"));
 
-    // Restore the dump - returns the actual database name where data was restored
-    // (may differ from sandbox_db_name for pg_dumpall format dumps)
-    let actual_db_name = adapter.restore_dump(&dump_path, &sandbox_db_name).await?;
+    // Restore the dump - returns the list of database names where data was restored
+    // (may be multiple databases for pg_dumpall format dumps)
+    let restored_databases = adapter.restore_dump(&dump_path, &sandbox_db_name).await?;
 
-    info!("Data restored to database: {}", actual_db_name);
+    info!(
+        "Data restored to {} database(s): {:?}",
+        restored_databases.len(),
+        restored_databases
+    );
 
-    // Update status to ANALYZING with the actual database name
+    // Use the first database as the default for backwards compatibility
+    let primary_db = restored_databases
+        .first()
+        .cloned()
+        .unwrap_or(sandbox_db_name);
+
+    // Update status to ANALYZING with the database names
     sqlx::query(
         r#"
         UPDATE dumps
-        SET status = $1, sandbox_db_name = $2, updated_at = $3
-        WHERE id = $4
+        SET status = $1, sandbox_db_name = $2, sandbox_databases = $3, updated_at = $4
+        WHERE id = $5
         "#,
     )
     .bind(DumpStatus::Analyzing.as_str())
-    .bind(&actual_db_name)
+    .bind(&primary_db)
+    .bind(&restored_databases)
     .bind(Utc::now())
     .bind(dump_id)
     .execute(db_pool)

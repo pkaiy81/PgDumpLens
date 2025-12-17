@@ -16,6 +16,11 @@ interface Dump {
   error_message: string | null;
 }
 
+interface DatabaseList {
+  databases: string[];
+  primary: string | null;
+}
+
 interface Column {
   name: string;
   data_type: string;
@@ -73,7 +78,10 @@ export default function DumpDetailPage() {
 
   const [dump, setDump] = useState<Dump | null>(null);
   const [schema, setSchema] = useState<SchemaResponse | null>(null);
+  const [databases, setDatabases] = useState<DatabaseList | null>(null);
+  const [selectedDb, setSelectedDb] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [schemaLoading, setSchemaLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const fetchDump = useCallback(async () => {
@@ -91,9 +99,33 @@ export default function DumpDetailPage() {
     }
   }, [slug]);
 
-  const fetchSchema = useCallback(async (dumpId: string) => {
+  const fetchDatabases = useCallback(async (dumpId: string) => {
     try {
-      const res = await fetch(`/api/dumps/${dumpId}/schema`);
+      const res = await fetch(`/api/dumps/${dumpId}/databases`);
+      if (!res.ok) {
+        // Fall back to single database mode
+        return null;
+      }
+      const data: DatabaseList = await res.json();
+      setDatabases(data);
+      // Auto-select primary database or first available
+      if (!selectedDb) {
+        setSelectedDb(data.primary || (data.databases.length > 0 ? data.databases[0] : null));
+      }
+      return data;
+    } catch (err) {
+      console.error('Databases fetch error:', err);
+      return null;
+    }
+  }, [selectedDb]);
+
+  const fetchSchema = useCallback(async (dumpId: string, database?: string) => {
+    try {
+      setSchemaLoading(true);
+      const url = database 
+        ? `/api/dumps/${dumpId}/schema?database=${encodeURIComponent(database)}`
+        : `/api/dumps/${dumpId}/schema`;
+      const res = await fetch(url);
       if (!res.ok) {
         throw new Error('Failed to load schema');
       }
@@ -101,8 +133,18 @@ export default function DumpDetailPage() {
       setSchema(data);
     } catch (err) {
       console.error('Schema fetch error:', err);
+    } finally {
+      setSchemaLoading(false);
     }
   }, []);
+
+  // Handle database selection change
+  const handleDatabaseChange = useCallback((newDb: string) => {
+    if (dump && newDb !== selectedDb) {
+      setSelectedDb(newDb);
+      fetchSchema(dump.id, newDb);
+    }
+  }, [dump, selectedDb, fetchSchema]);
 
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
@@ -113,13 +155,19 @@ export default function DumpDetailPage() {
       
       if (dumpData) {
         if (dumpData.status === 'READY') {
-          await fetchSchema(dumpData.id);
+          // Fetch available databases first
+          const dbList = await fetchDatabases(dumpData.id);
+          // Then fetch schema (use first database if multiple available)
+          const dbToUse = dbList?.primary || (dbList?.databases && dbList.databases.length > 0 ? dbList.databases[0] : undefined);
+          await fetchSchema(dumpData.id, dbToUse || undefined);
           setLoading(false);
-        } else if (dumpData.status === 'RESTORING' || dumpData.status === 'UPLOADED') {
+        } else if (dumpData.status === 'RESTORING' || dumpData.status === 'UPLOADED' || dumpData.status === 'ANALYZING') {
           interval = setInterval(async () => {
             const updated = await fetchDump();
             if (updated && updated.status === 'READY') {
-              await fetchSchema(updated.id);
+              const dbList = await fetchDatabases(updated.id);
+              const dbToUse = dbList?.primary || (dbList?.databases && dbList.databases.length > 0 ? dbList.databases[0] : undefined);
+              await fetchSchema(updated.id, dbToUse || undefined);
               setLoading(false);
               if (interval) clearInterval(interval);
             } else if (updated && updated.status === 'ERROR') {
@@ -144,7 +192,7 @@ export default function DumpDetailPage() {
     return () => {
       if (interval) clearInterval(interval);
     };
-  }, [fetchDump, fetchSchema]);
+  }, [fetchDump, fetchDatabases, fetchSchema]);
 
   if (loading) {
     return (
@@ -218,11 +266,46 @@ export default function DumpDetailPage() {
 
       {/* Schema Explorer */}
       {dump.status === 'READY' && schema ? (
-        <SchemaExplorer 
-          dumpId={dump.id}
-          schemaGraph={schema.schema_graph}
-          fullMermaidER={schema.mermaid_er}
-        />
+        <>
+          {/* Database Selector (only show if multiple databases available) */}
+          {databases && databases.databases.length > 1 && (
+            <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700 p-4">
+              <div className="flex items-center gap-4">
+                <label htmlFor="database-select" className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                  Database:
+                </label>
+                <select
+                  id="database-select"
+                  value={selectedDb || ''}
+                  onChange={(e) => handleDatabaseChange(e.target.value)}
+                  disabled={schemaLoading}
+                  className="flex-1 max-w-md px-3 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent disabled:opacity-50"
+                >
+                  {databases.databases.map((db) => (
+                    <option key={db} value={db}>
+                      {db} {db === databases.primary ? '(default)' : ''}
+                    </option>
+                  ))}
+                </select>
+                {schemaLoading && (
+                  <div className="flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-indigo-500"></div>
+                    Loading schema...
+                  </div>
+                )}
+                <div className="text-sm text-slate-500 dark:text-slate-400">
+                  {databases.databases.length} databases available (pg_dumpall format)
+                </div>
+              </div>
+            </div>
+          )}
+          <SchemaExplorer 
+            dumpId={dump.id}
+            schemaGraph={schema.schema_graph}
+            fullMermaidER={schema.mermaid_er}
+            selectedDatabase={selectedDb || undefined}
+          />
+        </>
       ) : dump.status === 'ERROR' ? (
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-2xl p-6">
           <h2 className="text-lg font-semibold text-red-600 dark:text-red-400 mb-2">Restore Failed</h2>

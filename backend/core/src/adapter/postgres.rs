@@ -199,7 +199,7 @@ impl PostgresAdapter {
 
 #[async_trait]
 impl DbAdapter for PostgresAdapter {
-    async fn restore_dump(&self, dump_path: &str, db_name: &str) -> Result<String> {
+    async fn restore_dump(&self, dump_path: &str, db_name: &str) -> Result<Vec<String>> {
         info!("Restoring dump {} to database {}", dump_path, db_name);
 
         // Detect dump format from magic bytes, not extension
@@ -213,16 +213,15 @@ impl DbAdapter for PostgresAdapter {
             Vec::new()
         };
 
-        // Determine the actual database name where data will be stored
-        let actual_db_name = if !pg_dumpall_databases.is_empty() {
-            // For pg_dumpall, use the first non-system database found
+        // Determine the database names that will be available after restore
+        let restored_databases = if !pg_dumpall_databases.is_empty() {
             info!(
                 "pg_dumpall format detected, databases in dump: {:?}",
                 pg_dumpall_databases
             );
-            pg_dumpall_databases[0].clone()
+            pg_dumpall_databases.clone()
         } else {
-            db_name.to_string()
+            vec![db_name.to_string()]
         };
 
         // Create database first (only for non-pg_dumpall dumps)
@@ -331,8 +330,11 @@ impl DbAdapter for PostgresAdapter {
             }
         }
 
-        info!("Successfully restored dump to database {}", actual_db_name);
-        Ok(actual_db_name)
+        info!(
+            "Successfully restored dump, available databases: {:?}",
+            restored_databases
+        );
+        Ok(restored_databases)
     }
 
     async fn list_tables(&self, db_name: &str) -> Result<Vec<TableInfo>> {
