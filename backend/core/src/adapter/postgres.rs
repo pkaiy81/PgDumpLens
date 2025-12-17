@@ -148,16 +148,15 @@ impl PostgresAdapter {
     /// Returns a list of database names that will be created by the dump
     fn detect_pg_dumpall_databases(&self, dump_path: &str) -> Result<Vec<String>> {
         use std::io::BufRead;
-        
+
         let path = Path::new(dump_path);
-        let file = File::open(path).map_err(|e| {
-            CoreError::RestoreFailed(format!("Failed to open dump file: {}", e))
-        })?;
+        let file = File::open(path)
+            .map_err(|e| CoreError::RestoreFailed(format!("Failed to open dump file: {}", e)))?;
         let reader = BufReader::new(file);
-        
+
         let mut databases = Vec::new();
         let mut is_pg_dumpall = false;
-        
+
         // Check first 100 lines for pg_dumpall signatures
         for line in reader.lines().take(100) {
             if let Ok(line) = line {
@@ -171,17 +170,16 @@ impl PostgresAdapter {
                 }
             }
         }
-        
+
         if !is_pg_dumpall {
             return Ok(databases);
         }
-        
+
         // Re-read file to find all CREATE DATABASE statements
-        let file = File::open(path).map_err(|e| {
-            CoreError::RestoreFailed(format!("Failed to open dump file: {}", e))
-        })?;
+        let file = File::open(path)
+            .map_err(|e| CoreError::RestoreFailed(format!("Failed to open dump file: {}", e)))?;
         let reader = BufReader::new(file);
-        
+
         for line in reader.lines() {
             if let Ok(line) = line {
                 // Match: CREATE DATABASE dbname WITH ...
@@ -190,14 +188,17 @@ impl PostgresAdapter {
                     if parts.len() >= 3 {
                         let db_name = parts[2].trim_end_matches(';');
                         // Skip template databases
-                        if db_name != "template0" && db_name != "template1" && db_name != "postgres" {
+                        if db_name != "template0"
+                            && db_name != "template1"
+                            && db_name != "postgres"
+                        {
                             databases.push(db_name.to_string());
                         }
                     }
                 }
             }
         }
-        
+
         info!("Detected pg_dumpall format with databases: {:?}", databases);
         Ok(databases)
     }
@@ -222,7 +223,10 @@ impl DbAdapter for PostgresAdapter {
         // Determine the actual database name where data will be stored
         let actual_db_name = if !pg_dumpall_databases.is_empty() {
             // For pg_dumpall, use the first non-system database found
-            info!("pg_dumpall format detected, databases in dump: {:?}", pg_dumpall_databases);
+            info!(
+                "pg_dumpall format detected, databases in dump: {:?}",
+                pg_dumpall_databases
+            );
             pg_dumpall_databases[0].clone()
         } else {
             db_name.to_string()
