@@ -1,0 +1,23 @@
+# Development Dockerfile for Next.js frontend with hot reload
+FROM node:20-alpine
+
+RUN corepack enable
+
+WORKDIR /app
+
+# Copy package files
+COPY package.json yarn.lock ./
+
+# Install dependencies
+RUN yarn config set nodeLinker node-modules && yarn install
+
+# Copy config files (these don't change often)
+COPY next.config.js tsconfig.json postcss.config.js tailwind.config.js ./
+
+EXPOSE 3000
+
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+
+# Default command for development
+CMD ["yarn", "dev"]

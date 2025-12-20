@@ -531,6 +531,19 @@ impl DbAdapter for PostgresAdapter {
         info!("Created database {}", db_name);
         Ok(())
     }
+
+    async fn analyze_database(&self, db_name: &str) -> Result<()> {
+        info!("Running ANALYZE on database {}", db_name);
+
+        let db_url = self.build_db_url(db_name);
+        let db_pool = PgPool::connect(&db_url).await?;
+
+        // Run ANALYZE on all tables to update statistics
+        sqlx::query("ANALYZE").execute(&db_pool).await?;
+
+        info!("ANALYZE completed for database {}", db_name);
+        Ok(())
+    }
 }
 
 impl PostgresAdapter {

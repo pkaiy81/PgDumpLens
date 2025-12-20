@@ -6,10 +6,12 @@ PostgreSQL のダンプファイルをアップロードし、データベース
 
 ## 📋 機能
 
-- **ダンプアップロード**: `pg_dump` で作成したダンプファイルをアップロード
+- **ダンプアップロード**: `pg_dump` / `pg_dumpall` で作成したダンプファイルをアップロード
+- **マルチデータベース対応**: `pg_dumpall` 形式で複数データベースを同時に表示・切り替え
 - **ER図生成**: テーブル間のリレーションを Mermaid.js で自動可視化
-- **データ閲覧**: 各テーブルのデータをブラウザで確認
-- **リレーション解説**: FK 関係を自然言語で説明
+- **データ閲覧**: 各テーブルのデータをブラウザで確認（ページネーション対応）
+- **値フィルター/サジェスト**: カラムの値でフィルタリング、頻出値のサジェスト機能
+- **リレーション探索**: セルクリックで関連テーブル・JOIN パス・SQL サンプルを表示
 - **影響リスク評価**: データ変更時の影響範囲をスコア化 (CASCADE 依存などを考慮)
 - **TTL 付き自動削除**: 一定時間後にダンプを自動クリーンアップ
 
@@ -54,18 +56,36 @@ git clone https://github.com/your-username/pgdumplens.git
 cd pgdumplens
 ```
 
-### 2. データベースを起動
+### 2. Docker Compose で起動
+
+#### 標準モード（推奨）
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
 これにより以下が起動します:
 
-- **Metadata DB**: localhost:5432 (ダンプ情報、スキーマキャッシュ)
-- **Sandbox DB**: localhost:5433 (リストアされたダンプ)
+- **API Server**: http://localhost:8080
+- **Frontend**: http://localhost:3000
+- **Metadata DB**: localhost:5432
+- **Sandbox DB**: localhost:5433
+- **Worker**: バックグラウンドジョブ処理
 
-### 3. 環境変数を設定
+#### ホットリロード開発モード
+
+ソースコード変更時に自動リビルド:
+
+```bash
+docker compose -f docker-compose.dev.yml up
+```
+
+- Frontend: `yarn dev` で起動（変更即時反映）
+- Backend: `cargo-watch` で起動（変更時自動リビルド）
+
+### 3. 環境変数を設定（ローカル開発のみ）
+
+Docker Compose を使わずにローカルで直接実行する場合:
 
 ```bash
 # バックエンド
@@ -75,43 +95,28 @@ cp backend/.env.example backend/.env
 cp frontend/.env.example frontend/.env.local
 ```
 
-### 4. バックエンドを起動
+### 4. ローカル直接実行（オプション）
+
+Docker を使わずに直接実行する場合:
 
 ```bash
+# データベースのみ起動
+docker compose up -d metadata-db sandbox-db
+
+# バックエンド
 cd backend
 cargo run --bin api-server
-```
 
-API サーバーが <http://localhost:8080> で起動します。
-
-### 5. Worker を起動（別ターミナル）
-
-Worker はダンプのリストアとスキーマ解析を非同期で処理します。
-
-```bash
+# Worker（別ターミナル）
 cd backend
 cargo run --bin worker
-```
 
-または、すべてのサービスを一度に起動する場合：
-
-```bash
-# API + Worker + Frontend を同時起動
-docker-compose up -d  # データベースのみ起動
-cd backend && cargo run --bin api-server &
-cd backend && cargo run --bin worker &
-cd frontend && yarn dev
-```
-
-### 6. フロントエンドを起動
-
-```bash
+# フロントエンド（別ターミナル）
 cd frontend
-yarn install
-yarn dev
+yarn install && yarn dev
 ```
 
-アプリが <http://localhost:3000> で起動します。
+アプリが http://localhost:3000 で起動します。
 
 ## 📁 プロジェクト構成
 
@@ -134,8 +139,9 @@ pgdumplens/
 │   └── upload-dump.ps1      # Windows 用アップロードスクリプト
 ├── docs/                    # ドキュメント
 │   └── architecture.md      # アーキテクチャ図
-├── docker-compose.yml       # 開発用 Docker Compose
-└── docker-compose.prod.yml  # 本番用 Docker Compose
+├── docker-compose.yml       # 標準開発環境 (ビルド済みイメージ)
+├── docker-compose.dev.yml   # ホットリロード開発環境
+└── docker-compose.prod.yml  # 本番用 (Nginx リバースプロキシ付き)
 ```
 
 ## 🖥️ CLI アップロード
@@ -575,16 +581,22 @@ kubectl get svc -n pgdumplens
 
 ## 📊 API エンドポイント
 
-| エンドポイント                            | メソッド | 説明                   |
-| ----------------------------------------- | -------- | ---------------------- |
-| `/health`                                 | GET      | ヘルスチェック         |
-| `/api/dumps`                              | GET      | ダンプ一覧取得         |
-| `/api/dumps`                              | POST     | 新規ダンプアップロード |
-| `/api/dumps/{id}`                         | GET      | ダンプ詳細取得         |
-| `/api/dumps/{id}/schema`                  | GET      | スキーマ情報取得       |
-| `/api/dumps/{id}/tables/{schema}/{table}` | GET      | テーブルデータ取得     |
-| `/api/dumps/{id}/relation/explain`        | POST     | リレーション解説       |
-| `/api/dumps/{id}/risk/{schema}/{table}`   | GET      | テーブルリスク評価     |
+| エンドポイント                                          | メソッド | 説明                       |
+| ------------------------------------------------------- | -------- | -------------------------- |
+| `/health`                                               | GET      | ヘルスチェック             |
+| `/api/dumps`                                            | GET      | ダンプ一覧取得             |
+| `/api/dumps`                                            | POST     | 新規ダンプセッション作成   |
+| `/api/dumps/{id}`                                       | GET      | ダンプ詳細取得             |
+| `/api/dumps/{id}/upload`                                | PUT      | ダンプファイルアップロード |
+| `/api/dumps/{id}/restore`                               | POST     | リストア開始               |
+| `/api/dumps/{id}/databases`                             | GET      | データベース一覧取得       |
+| `/api/dumps/{id}/schema`                                | GET      | スキーマ情報取得           |
+| `/api/dumps/{id}/tables/{table}`                        | GET      | テーブルデータ取得         |
+| `/api/dumps/{id}/suggest`                               | GET      | 値サジェスト取得           |
+| `/api/dumps/{id}/relation/explain`                      | POST     | リレーション解説           |
+| `/api/dumps/{id}/risk/table/{schema}/{table}`           | GET      | テーブルリスク評価         |
+| `/api/dumps/{id}/risk/column/{schema}/{table}/{column}` | GET      | カラムリスク評価           |
+| `/api/dumps/by-slug/{slug}`                             | GET      | Slug でダンプ取得          |
 
 ## 📄 ライセンス
 

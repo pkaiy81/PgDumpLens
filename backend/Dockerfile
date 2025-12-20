@@ -44,12 +44,8 @@ COPY --from=builder /app/target/release/worker /app/
 # Copy migrations
 COPY migrations ./migrations
 
-# Create non-root user
-RUN addgroup -g 1000 appuser && \
-    adduser -D -u 1000 -G appuser appuser && \
-    chown -R appuser:appuser /app
-
-USER appuser
+# Create upload directory
+RUN mkdir -p /data/uploads
 
 EXPOSE 8080
 

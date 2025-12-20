@@ -122,6 +122,9 @@ async fn process_analysis<A: DbAdapter>(
 
     let sandbox_db: String = row.get("sandbox_db_name");
 
+    // Run ANALYZE to update table statistics (required for accurate row counts)
+    adapter.analyze_database(&sandbox_db).await?;
+
     // Build schema graph
     let schema_graph = adapter.build_schema_graph(&sandbox_db).await?;
 

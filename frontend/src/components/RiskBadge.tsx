@@ -72,20 +72,42 @@ export function RiskBadge({ dumpId, schema, table, showReasons = false }: RiskBa
 
   const colorClass = getRiskColor(risk.level);
 
+  // Get risk level label
+  const getRiskLabel = (level: RiskLevel): string => {
+    switch (level) {
+      case 'low': return 'Low';
+      case 'medium': return 'Medium';
+      case 'high': return 'High';
+      case 'critical': return 'Critical';
+    }
+  };
+
   return (
-    <div className="space-y-2">
-      <div
-        className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full ${colorClass}`}
-      >
-        <RiskIcon level={risk.level} />
-        <span className="font-medium capitalize">{risk.level}</span>
-        <span className="text-sm opacity-75">({risk.score}/100)</span>
+    <div className="space-y-3">
+      {/* Risk Badge */}
+      <div className="flex items-center gap-3">
+        <div
+          className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg shadow-sm ${colorClass}`}
+        >
+          <RiskIcon level={risk.level} />
+          <span className="font-bold">{getRiskLabel(risk.level)}</span>
+          <span className="font-mono font-bold text-sm">
+            {risk.score}/100
+          </span>
+        </div>
       </div>
+      
+      {/* Risk Score Explanation */}
+      <div className="text-xs text-slate-500 dark:text-slate-400 bg-slate-100 dark:bg-slate-800 rounded-lg px-3 py-2 max-w-md">
+        <span className="font-semibold">Deletion Risk Score:</span> Indicates the potential impact of deleting data from this table. 
+        Higher scores mean more cascading effects on related tables.
+      </div>
+
       {showReasons && risk.reasons.length > 0 && (
-        <ul className="text-sm text-gray-600 space-y-1 ml-4">
+        <ul className="text-sm text-slate-600 dark:text-slate-400 space-y-1 ml-4">
           {risk.reasons.map((reason, i) => (
             <li key={i} className="flex items-start gap-2">
-              <span className="text-gray-400">•</span>
+              <span className="text-slate-400 dark:text-slate-500">•</span>
               {reason}
             </li>
           ))}

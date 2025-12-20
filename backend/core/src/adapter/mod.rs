@@ -55,6 +55,9 @@ pub trait DbAdapter: Send + Sync {
 
     /// Create a new database
     async fn create_database(&self, db_name: &str) -> Result<()>;
+
+    /// Run ANALYZE to update table statistics (required for accurate row counts)
+    async fn analyze_database(&self, db_name: &str) -> Result<()>;
 }
 
 #[cfg(test)]
@@ -82,6 +85,7 @@ mod tests {
             async fn drop_database(&self, db_name: &str) -> Result<()>;
             async fn database_exists(&self, db_name: &str) -> Result<bool>;
             async fn create_database(&self, db_name: &str) -> Result<()>;
+            async fn analyze_database(&self, db_name: &str) -> Result<()>;
         }
     }
 

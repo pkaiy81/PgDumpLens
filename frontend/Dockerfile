@@ -14,6 +14,11 @@ RUN yarn config set nodeLinker node-modules && yarn install --immutable
 # Copy source code
 COPY . .
 
+# Set API_URL for build time (Docker internal network)
+# Must include the full path pattern for Next.js rewrites
+ARG API_URL=http://api:8080/api/:path*
+ENV API_URL=${API_URL}
+
 # Build the application
 RUN yarn build
 

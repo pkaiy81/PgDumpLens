@@ -40,19 +40,20 @@ export function formatBytes(bytes: number): string {
 
 /**
  * Generate a color for a risk level
+ * Uses high-contrast colors for better visibility in both light and dark modes
  */
 export function getRiskColor(level: string): string {
   switch (level) {
     case 'low':
-      return 'text-green-600 bg-green-100';
+      return 'text-green-700 bg-green-50 dark:text-green-300 dark:bg-green-950 border-2 border-green-500';
     case 'medium':
-      return 'text-yellow-600 bg-yellow-100';
+      return 'text-yellow-700 bg-yellow-50 dark:text-yellow-300 dark:bg-yellow-950 border-2 border-yellow-500';
     case 'high':
-      return 'text-orange-600 bg-orange-100';
+      return 'text-orange-700 bg-orange-50 dark:text-orange-300 dark:bg-orange-950 border-2 border-orange-500';
     case 'critical':
-      return 'text-red-600 bg-red-100';
+      return 'text-red-700 bg-red-50 dark:text-red-300 dark:bg-red-950 border-2 border-red-500';
     default:
-      return 'text-gray-600 bg-gray-100';
+      return 'text-slate-700 bg-slate-50 dark:text-slate-300 dark:bg-slate-900 border-2 border-slate-400';
   }
 }
 

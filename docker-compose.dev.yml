@@ -1,5 +1,8 @@
 version: '3.8'
 
+# Development configuration with hot reload support
+# Usage: docker compose -f docker-compose.dev.yml up
+
 services:
   # Metadata Database - stores dump info, schema cache, job queue
   metadata-db:
@@ -39,13 +42,12 @@ services:
       timeout: 5s
       retries: 5
 
-  # API Server
+  # API Server - Development with cargo-watch for hot reload
   api:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: pgdumplens-api
-    command: ["/app/api-server"]
     environment:
       DATABASE_URL: postgres://dbviewer:dbviewer_dev@metadata-db:5432/dbviewer_metadata
       SANDBOX_HOST: sandbox-db
@@ -56,23 +58,27 @@ services:
       PORT: "8080"
       UPLOAD_DIR: /data/uploads
       RUST_LOG: info,db_viewer=debug
+      CARGO_TARGET_DIR: /app/target
     ports:
       - "8080:8080"
     volumes:
+      - ./backend:/app/src
       - uploads-data:/data/uploads
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache:/app/target
     depends_on:
       metadata-db:
         condition: service_healthy
       sandbox-db:
         condition: service_healthy
+    command: ["cargo", "watch", "-x", "run --bin api-server"]
 
-  # Worker - processes restore and analysis jobs
+  # Worker - Development with cargo-watch for hot reload
   worker:
     build:
       context: ./backend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: pgdumplens-worker
-    command: ["/app/worker"]
     environment:
       DATABASE_URL: postgres://dbviewer:dbviewer_dev@metadata-db:5432/dbviewer_metadata
       SANDBOX_HOST: sandbox-db
@@ -82,28 +88,41 @@ services:
       UPLOAD_DIR: /data/uploads
       POLL_INTERVAL_SECS: "5"
       RUST_LOG: info,db_viewer_worker=debug
+      CARGO_TARGET_DIR: /app/target
     volumes:
+      - ./backend:/app/src
       - uploads-data:/data/uploads
+      - cargo-cache:/usr/local/cargo/registry
+      - target-cache-worker:/app/target
     depends_on:
       metadata-db:
         condition: service_healthy
       sandbox-db:
         condition: service_healthy
+    command: ["cargo", "watch", "-x", "run --bin worker"]
 
-  # Frontend
+  # Frontend - Development with Next.js hot reload
   frontend:
     build:
       context: ./frontend
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.dev
     container_name: pgdumplens-frontend
     environment:
-      API_URL: http://api:8080
+      API_URL: http://api:8080/api/:path*
+      WATCHPACK_POLLING: "true"
     ports:
       - "3000:3000"
+    volumes:
+      - ./frontend/src:/app/src
+      - ./frontend/public:/app/public
     depends_on:
       - api
+    command: ["yarn", "dev"]
 
 volumes:
   metadata-data:
   sandbox-data:
   uploads-data:
+  cargo-cache:
+  target-cache:
+  target-cache-worker:

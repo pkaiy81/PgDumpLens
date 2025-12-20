@@ -15,23 +15,23 @@ graph TB
         CLI[CLI Tool]
     end
 
-    subgraph "Kubernetes Cluster"
+    subgraph "Docker / Kubernetes"
         subgraph "Frontend Pod"
             FE[Next.js Frontend]
         end
 
         subgraph "API Pod"
-            API[Rust API Server]
+            API[Rust API Server<br/>Axum]
         end
 
         subgraph "Worker Pod"
-            WORKER[Rust Worker]
+            WORKER[Rust Worker<br/>Async Jobs]
         end
 
         subgraph "Storage"
             META[(Metadata PostgreSQL)]
             SANDBOX[(Sandbox PostgreSQL)]
-            PVC[Upload PVC]
+            PVC[Upload Volume]
         end
     end
 
@@ -39,6 +39,7 @@ graph TB
     CLI --> API
     FE --> API
     API --> META
+    API --> SANDBOX
     API --> PVC
     WORKER --> META
     WORKER --> SANDBOX
@@ -53,30 +54,29 @@ graph TB
 flowchart LR
     subgraph Frontend
         direction TB
-        Pages[Pages]
-        Components[Components]
-        Types[Types]
-        Lib[Utils]
+        Pages[Pages<br/>/, /upload, /d/slug]
+        Components[Components<br/>SchemaExplorer<br/>DataTable<br/>RelationshipExplorer<br/>MermaidDiagram]
+        Types[TypeScript Types]
     end
 
     subgraph Backend
         direction TB
         subgraph Core
             Domain[Domain Models]
-            Adapter[DB Adapters]
+            Adapter[PostgreSQL Adapter]
             Risk[Risk Calculator]
             Schema[Schema Tools]
             SqlGen[SQL Generator]
         end
 
         subgraph API
-            Handlers[Handlers]
+            Handlers[Handlers<br/>dumps, schema<br/>relation, risk]
             Routes[Routes]
             State[App State]
         end
 
         subgraph Worker
-            Jobs[Job Processor]
+            Jobs[Job Processor<br/>Restore, Analyze]
             Config[Config]
         end
     end
@@ -97,7 +97,7 @@ stateDiagram-v2
     UPLOADING --> UPLOADED: Upload Complete
     UPLOADED --> RESTORING: Trigger Restore
     RESTORING --> ANALYZING: Restore Done
-    ANALYZING --> READY: Analysis Done
+    ANALYZING --> READY: ANALYZE + Schema Build
     READY --> DELETED: TTL Expired
     
     CREATED --> ERROR: Timeout
@@ -141,9 +141,10 @@ sequenceDiagram
     Worker->>MetaDB: Fetch RESTORING jobs
     Worker->>Storage: Read dump file
     Worker->>SandboxDB: CREATE DATABASE
-    Worker->>SandboxDB: pg_restore
+    Worker->>SandboxDB: pg_restore / psql
     Worker->>MetaDB: Update status=ANALYZING
     
+    Worker->>SandboxDB: ANALYZE (update stats)
     Worker->>SandboxDB: Introspect schema
     Worker->>SandboxDB: Build FK graph
     Worker->>MetaDB: Store schema_graph
@@ -152,7 +153,32 @@ sequenceDiagram
 
 ---
 
-## 5. Request Flow - Relationship Exploration
+## 5. Request Flow - Data Browsing with Filter
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Frontend
+    participant API
+    participant SandboxDB as Sandbox DB
+
+    User->>Frontend: Select table
+    Frontend->>API: GET /api/dumps/{id}/tables/{table}
+    API->>SandboxDB: SELECT * LIMIT 50
+    API-->>Frontend: {columns, rows, total_count}
+    
+    User->>Frontend: Click filter icon on column
+    Frontend->>API: GET /api/dumps/{id}/suggest?column=X
+    API->>SandboxDB: SELECT X, COUNT(*) GROUP BY
+    API-->>Frontend: {suggestions: [...]}
+    
+    User->>Frontend: Select filter value
+    Frontend->>Frontend: Client-side filter rows
+```
+
+---
+
+## 6. Request Flow - Relationship Exploration
 
 ```mermaid
 sequenceDiagram
@@ -160,23 +186,28 @@ sequenceDiagram
     participant Frontend
     participant API
     participant MetaDB as Metadata DB
-    participant SandboxDB as Sandbox DB
 
     User->>Frontend: Click cell value
     Frontend->>API: POST /api/dumps/{id}/relation/explain
     API->>MetaDB: Fetch schema_graph
+    API->>API: Find inbound FKs
+    API->>API: Find outbound FKs
     API->>API: Calculate risk score
     API->>API: Generate SQL examples
     API-->>Frontend: {explanations, sql_examples}
     
-    Frontend->>Frontend: Display relationship panel
-    Frontend->>Frontend: Show risk badge
-    Frontend->>Frontend: Render SQL examples
+    Frontend->>Frontend: Display RelationshipExplorer modal
+    Frontend->>Frontend: Show inbound/outbound relations
+    Frontend->>Frontend: Render copyable SQL examples
 ```
+
+**表示条件:**
+- **Inbound**: 他のテーブルがこのカラムを FK で参照している場合
+- **Outbound**: このカラムが FK として他のテーブルを参照している場合
 
 ---
 
-## 6. Risk Assessment Model
+## 7. Risk Assessment Model
 
 ```mermaid
 flowchart TD
@@ -210,7 +241,17 @@ flowchart TD
 
 ---
 
-## 7. Kubernetes Deployment Architecture
+## 8. Docker Compose Configurations
+
+| ファイル                  | 用途               | 特徴                               |
+| ------------------------- | ------------------ | ---------------------------------- |
+| `docker-compose.yml`      | 標準開発環境       | ビルド済みイメージ、全サービス起動 |
+| `docker-compose.dev.yml`  | ホットリロード開発 | cargo-watch, yarn dev              |
+| `docker-compose.prod.yml` | 本番環境           | Nginx リバースプロキシ付き         |
+
+---
+
+## 9. Kubernetes Deployment Architecture
 
 ```mermaid
 graph TB
@@ -263,7 +304,7 @@ graph TB
 
 ---
 
-## 8. ER Diagram Generation Flow
+## 10. ER Diagram Generation Flow
 
 ```mermaid
 flowchart LR
@@ -286,20 +327,20 @@ flowchart LR
 
 ---
 
-## 9. Data Flow Summary
+## 11. Data Flow Summary
 
-| Flow | Source | Destination | Data |
-|------|--------|-------------|------|
-| Upload | Browser | API → Storage | Dump file |
-| Restore | Worker → Storage | Sandbox DB | SQL data |
-| Introspection | Sandbox DB | Metadata DB | Schema graph |
-| View | Metadata DB | API → Browser | ER diagram, tables |
-| Query | Sandbox DB | API → Browser | Row data |
-| Cleanup | CronJob | Sandbox DB + Storage | Drop DB, delete files |
+| Flow          | Source           | Destination          | Data                  |
+| ------------- | ---------------- | -------------------- | --------------------- |
+| Upload        | Browser          | API → Storage        | Dump file             |
+| Restore       | Worker → Storage | Sandbox DB           | SQL data              |
+| Introspection | Sandbox DB       | Metadata DB          | Schema graph          |
+| View          | Metadata DB      | API → Browser        | ER diagram, tables    |
+| Query         | Sandbox DB       | API → Browser        | Row data              |
+| Cleanup       | CronJob          | Sandbox DB + Storage | Drop DB, delete files |
 
 ---
 
-## 10. Technology Stack
+## 12. Technology Stack
 
 ```mermaid
 mindmap
@@ -330,14 +371,27 @@ mindmap
 
 ## Quick Start Commands
 
-### Backend
+### Docker Compose (推奨)
+```bash
+# 標準起動
+docker compose up -d
+
+# ホットリロード開発
+docker compose -f docker-compose.dev.yml up
+
+# 本番環境
+docker compose -f docker-compose.prod.yml up -d
+```
+
+### Backend (ローカル開発)
 ```bash
 cd backend
 cargo build --release
 cargo test --workspace
+cargo run --bin api-server
 ```
 
-### Frontend
+### Frontend (ローカル開発)
 
 ```bash
 cd frontend
@@ -354,4 +408,4 @@ kubectl apply -f deploy/k8s/
 
 ---
 
-*Generated for DB Dump Visualization & Risk-Aware Explorer v1*
+*PgDumpLens - PostgreSQL Dump Visualization & Risk-Aware Explorer v0.1.0*

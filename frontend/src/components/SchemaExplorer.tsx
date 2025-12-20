@@ -4,6 +4,7 @@ import { useState, useMemo, useCallback } from 'react';
 import { MermaidDiagram } from './MermaidDiagram';
 import { RiskBadge } from './RiskBadge';
 import { DataTable } from './DataTable';
+import { RelationshipExplorer } from './RelationshipExplorer';
 
 interface Column {
   name: string;
@@ -161,6 +162,24 @@ export function SchemaExplorer({ dumpId, schemaGraph, fullMermaidER, selectedDat
   const [selectedTable, setSelectedTable] = useState<Table | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [relationDegrees, setRelationDegrees] = useState(1);
+  
+  // State for relationship explorer
+  const [relationshipExplorer, setRelationshipExplorer] = useState<{
+    isOpen: boolean;
+    column: string;
+    value: unknown;
+  }>({ isOpen: false, column: '', value: null });
+
+  // Handle cell click in DataTable
+  const handleCellClick = useCallback((column: string, value: unknown) => {
+    if (selectedTable) {
+      setRelationshipExplorer({
+        isOpen: true,
+        column,
+        value,
+      });
+    }
+  }, [selectedTable]);
 
   // Get unique schemas with table counts
   const schemas = useMemo(() => {
@@ -689,7 +708,20 @@ export function SchemaExplorer({ dumpId, schemaGraph, fullMermaidER, selectedDat
                 </select>
               </div>
               {selectedTable ? (
-                <DataTable dumpId={dumpId} schema={selectedTable.schema_name} table={selectedTable.table_name} database={selectedDatabase} />
+                <>
+                  <div className="mb-4 p-3 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg border border-indigo-200 dark:border-indigo-800">
+                    <p className="text-sm text-indigo-700 dark:text-indigo-300">
+                      💡 <strong>Tip:</strong> Click any cell to explore its relationships and view SQL examples
+                    </p>
+                  </div>
+                  <DataTable 
+                    dumpId={dumpId} 
+                    schema={selectedTable.schema_name} 
+                    table={selectedTable.table_name} 
+                    database={selectedDatabase}
+                    onCellClick={handleCellClick}
+                  />
+                </>
               ) : (
                 <p className="text-center py-8 text-slate-500 dark:text-slate-400">
                   Select a table to view its data
@@ -698,6 +730,19 @@ export function SchemaExplorer({ dumpId, schemaGraph, fullMermaidER, selectedDat
             </div>
           )}
       </div>
+
+      {/* Relationship Explorer Modal */}
+      {selectedTable && (
+        <RelationshipExplorer
+          isOpen={relationshipExplorer.isOpen}
+          onClose={() => setRelationshipExplorer({ isOpen: false, column: '', value: null })}
+          dumpId={dumpId}
+          schema={selectedTable.schema_name}
+          table={selectedTable.table_name}
+          column={relationshipExplorer.column}
+          value={relationshipExplorer.value}
+        />
+      )}
     </div>
   );
 }

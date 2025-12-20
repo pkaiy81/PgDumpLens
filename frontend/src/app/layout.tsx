@@ -27,9 +27,14 @@ export default function RootLayout({
                       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
                     </svg>
                   </div>
-                  <span className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400 bg-clip-text text-transparent">
-                    PgDumpLens
-                  </span>
+                  <div className="flex items-baseline gap-2">
+                    <span className="text-xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 dark:from-indigo-400 dark:to-purple-400 bg-clip-text text-transparent">
+                      PgDumpLens
+                    </span>
+                    <span className="text-xs text-slate-400 dark:text-slate-500 font-medium">
+                      v0.1.0
+                    </span>
+                  </div>
                 </a>
                 <nav className="flex items-center space-x-1">
                   <a 
