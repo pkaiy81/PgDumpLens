@@ -28,9 +28,9 @@ describe('RiskBadge', () => {
     render(<RiskBadge dumpId="test-id" schema="public" table="users" />);
 
     await waitFor(() => {
-      expect(screen.getByText('low')).toBeInTheDocument();
+      expect(screen.getByText('Low')).toBeInTheDocument();
     });
-    expect(screen.getByText('(15/100)')).toBeInTheDocument();
+    expect(screen.getByText('15/100')).toBeInTheDocument();
   });
 
   it('renders high risk correctly', async () => {
@@ -48,9 +48,9 @@ describe('RiskBadge', () => {
     render(<RiskBadge dumpId="test-id" schema="public" table="orders" />);
 
     await waitFor(() => {
-      expect(screen.getByText('high')).toBeInTheDocument();
+      expect(screen.getByText('High')).toBeInTheDocument();
     });
-    expect(screen.getByText('(70/100)')).toBeInTheDocument();
+    expect(screen.getByText('70/100')).toBeInTheDocument();
   });
 
   it('renders critical risk correctly', async () => {
@@ -68,7 +68,7 @@ describe('RiskBadge', () => {
     render(<RiskBadge dumpId="test-id" schema="public" table="critical_table" />);
 
     await waitFor(() => {
-      expect(screen.getByText('critical')).toBeInTheDocument();
+      expect(screen.getByText('Critical')).toBeInTheDocument();
     });
   });
 
@@ -106,7 +106,7 @@ describe('RiskBadge', () => {
     render(<RiskBadge dumpId="test-id" schema="public" table="products" showReasons={false} />);
 
     await waitFor(() => {
-      expect(screen.getByText('medium')).toBeInTheDocument();
+      expect(screen.getByText('Medium')).toBeInTheDocument();
     });
     expect(screen.queryByText('Referenced by 3 tables')).not.toBeInTheDocument();
   });

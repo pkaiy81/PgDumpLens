@@ -70,7 +70,7 @@ describe('getRiskColor', () => {
   });
 
   it('should return default for unknown risk', () => {
-    expect(getRiskColor('unknown')).toContain('gray');
+    expect(getRiskColor('unknown')).toContain('slate');
   });
 });
 
