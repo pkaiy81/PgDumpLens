@@ -11,8 +11,6 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
-use db_viewer_core::adapter::postgres::PostgresAdapter;
-use db_viewer_core::adapter::DbAdapter;
 use db_viewer_core::domain::SchemaGraph;
 use db_viewer_core::schema::generate_mermaid_er;
 
@@ -36,8 +34,8 @@ pub async fn get_schema(
     Path(id): Path<Uuid>,
     Query(query): Query<SchemaQuery>,
 ) -> ApiResult<Json<SchemaResponse>> {
-    // If a specific database is requested, build schema live from sandbox
-    if let Some(ref requested_db) = query.database {
+    // Determine which database to use
+    let requested_db = if let Some(ref db) = query.database {
         // Verify this database is available for this dump
         let dump_row = sqlx::query(
             r#"
@@ -59,68 +57,40 @@ pub async fn get_schema(
         // Check if requested database is available
         let available = available_dbs
             .as_ref()
-            .map(|dbs| dbs.contains(requested_db))
+            .map(|dbs| dbs.contains(db))
             .unwrap_or(false)
-            || primary_db.as_ref() == Some(requested_db);
+            || primary_db.as_ref() == Some(db);
 
         if !available {
             return Err(ApiError::BadRequest(format!(
                 "Database '{}' is not available for this dump. Available: {:?}",
-                requested_db,
+                db,
                 available_dbs.unwrap_or_else(|| primary_db.map_or(vec![], |p| vec![p]))
             )));
         }
 
-        // Create PostgresAdapter to build schema graph live from sandbox
-        // First, connect to the template database to create the adapter
-        let template_url = if let Some(ref password) = state.config.sandbox_password {
-            format!(
-                "postgres://{}:{}@{}:{}/postgres",
-                state.config.sandbox_user,
-                password,
-                state.config.sandbox_host,
-                state.config.sandbox_port
-            )
-        } else {
-            format!(
-                "postgres://{}@{}:{}/postgres",
-                state.config.sandbox_user, state.config.sandbox_host, state.config.sandbox_port
-            )
-        };
+        db.clone()
+    } else {
+        // Get primary database name
+        let row = sqlx::query("SELECT sandbox_db_name FROM dumps WHERE id = $1")
+            .bind(id)
+            .fetch_optional(&state.db_pool)
+            .await?
+            .ok_or_else(|| ApiError::NotFound(format!("Dump {} not found", id)))?;
 
-        let sandbox_pool = sqlx::postgres::PgPool::connect(&template_url)
-            .await
-            .map_err(|e| ApiError::Internal(format!("Failed to connect to sandbox: {}", e)))?;
+        row.get("sandbox_db_name")
+    };
 
-        let adapter = PostgresAdapter::new(
-            sandbox_pool,
-            state.config.sandbox_host.clone(),
-            state.config.sandbox_port,
-            state.config.sandbox_user.clone(),
-            state.config.sandbox_password.clone(),
-        );
-
-        let schema_graph = adapter
-            .build_schema_graph(requested_db)
-            .await
-            .map_err(|e| ApiError::Internal(format!("Failed to build schema: {}", e)))?;
-        let mermaid_er = generate_mermaid_er(&schema_graph);
-
-        return Ok(Json(SchemaResponse {
-            schema_graph,
-            mermaid_er,
-        }));
-    }
-
-    // Fetch cached schema from metadata DB (default behavior)
+    // Fetch cached schema from metadata DB
     let row = sqlx::query(
         r#"
         SELECT schema_graph
         FROM dump_schemas
-        WHERE dump_id = $1
+        WHERE dump_id = $1 AND database_name = $2
         "#,
     )
     .bind(id)
+    .bind(&requested_db)
     .fetch_optional(&state.db_pool)
     .await?;
 
@@ -135,8 +105,8 @@ pub async fn get_schema(
             }))
         }
         None => Err(ApiError::NotFound(format!(
-            "Schema not found for dump {}. Ensure the dump is in READY state.",
-            id
+            "Schema not found for dump {} database '{}'. Ensure the dump is in READY state.",
+            id, requested_db
         ))),
     }
 }

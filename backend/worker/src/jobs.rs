@@ -114,34 +114,56 @@ async fn process_analysis<A: DbAdapter>(
 ) -> anyhow::Result<()> {
     info!("Processing analysis for dump {}", dump_id);
 
-    // Get sandbox database name
-    let row = sqlx::query("SELECT sandbox_db_name FROM dumps WHERE id = $1")
+    // Get all sandbox databases
+    let row = sqlx::query("SELECT sandbox_db_name, sandbox_databases FROM dumps WHERE id = $1")
         .bind(dump_id)
         .fetch_one(db_pool)
         .await?;
 
-    let sandbox_db: String = row.get("sandbox_db_name");
+    let primary_db: String = row.get("sandbox_db_name");
+    let all_databases: Option<Vec<String>> = row.get("sandbox_databases");
 
-    // Run ANALYZE to update table statistics (required for accurate row counts)
-    adapter.analyze_database(&sandbox_db).await?;
+    // List of databases to analyze
+    let databases_to_analyze = if let Some(ref dbs) = all_databases {
+        dbs.clone()
+    } else {
+        vec![primary_db.clone()]
+    };
 
-    // Build schema graph
-    let schema_graph = adapter.build_schema_graph(&sandbox_db).await?;
+    info!(
+        "Analyzing {} database(s) for dump {}",
+        databases_to_analyze.len(),
+        dump_id
+    );
 
-    // Store schema graph in metadata
-    sqlx::query(
-        r#"
-        INSERT INTO dump_schemas (dump_id, schema_graph, created_at)
-        VALUES ($1, $2, $3)
-        ON CONFLICT (dump_id) DO UPDATE
-        SET schema_graph = $2, created_at = $3
-        "#,
-    )
-    .bind(dump_id)
-    .bind(serde_json::to_value(&schema_graph)?)
-    .bind(Utc::now())
-    .execute(db_pool)
-    .await?;
+    // Process each database
+    for db_name in databases_to_analyze {
+        info!("Analyzing database: {}", db_name);
+
+        // Run ANALYZE to update table statistics (required for accurate row counts)
+        adapter.analyze_database(&db_name).await?;
+
+        // Build schema graph
+        let schema_graph = adapter.build_schema_graph(&db_name).await?;
+
+        // Store schema graph in metadata with database name
+        sqlx::query(
+            r#"
+            INSERT INTO dump_schemas (dump_id, database_name, schema_graph, created_at)
+            VALUES ($1, $2, $3, $4)
+            ON CONFLICT (dump_id, database_name) DO UPDATE
+            SET schema_graph = $3, created_at = $4
+            "#,
+        )
+        .bind(dump_id)
+        .bind(&db_name)
+        .bind(serde_json::to_value(&schema_graph)?)
+        .bind(Utc::now())
+        .execute(db_pool)
+        .await?;
+
+        info!("Successfully analyzed database: {}", db_name);
+    }
 
     // Update status to READY
     sqlx::query(

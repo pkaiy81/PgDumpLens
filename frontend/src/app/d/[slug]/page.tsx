@@ -195,16 +195,26 @@ export default function DumpDetailPage() {
   }, [fetchDump, fetchDatabases, fetchSchema]);
 
   if (loading) {
+    const statusMessage = dump?.status === 'RESTORING' 
+      ? 'Restoring database...' 
+      : dump?.status === 'ANALYZING'
+      ? 'Analyzing schema and relationships...'
+      : 'Loading...';
+    
+    const statusDetail = (dump?.status === 'RESTORING' || dump?.status === 'ANALYZING')
+      ? 'This may take a few minutes for large dumps'
+      : null;
+
     return (
       <div className="max-w-7xl mx-auto py-12">
         <div className="flex flex-col items-center justify-center py-20">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-indigo-500 mb-4"></div>
           <p className="text-slate-500 dark:text-slate-400">
-            {dump?.status === 'RESTORING' ? 'Restoring database...' : 'Loading...'}
+            {statusMessage}
           </p>
-          {dump?.status === 'RESTORING' && (
+          {statusDetail && (
             <p className="text-sm text-slate-400 dark:text-slate-500 mt-2">
-              This may take a few minutes for large dumps
+              {statusDetail}
             </p>
           )}
         </div>

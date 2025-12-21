@@ -254,6 +254,7 @@ impl DbAdapter for PostgresAdapter {
                 db_name,
                 "--no-owner",
                 "--no-privileges",
+                "--no-tablespaces", // Ignore tablespace settings from source DB
                 &actual_path,
             ]);
 
@@ -267,7 +268,14 @@ impl DbAdapter for PostgresAdapter {
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                if stderr.contains("ERROR") || stderr.contains("FATAL") {
+                // Only fail on fatal errors, not on ignorable warnings like
+                // tablespace, transaction_timeout, or permission issues
+                let is_fatal = stderr.contains("FATAL")
+                    || (stderr.contains("ERROR")
+                        && !stderr.contains("tablespace")
+                        && !stderr.contains("transaction_timeout")
+                        && !stderr.contains("errors ignored on restore"));
+                if is_fatal {
                     return Err(CoreError::RestoreFailed(stderr.to_string()));
                 }
                 warn!("pg_restore completed with warnings: {}", stderr);
@@ -342,7 +350,7 @@ impl DbAdapter for PostgresAdapter {
             SELECT 
                 t.table_schema,
                 t.table_name,
-                COALESCE(s.n_live_tup, 0) as estimated_rows
+                COALESCE(s.n_live_tup, 0) as estimated_rows                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 
             FROM information_schema.tables t
             LEFT JOIN pg_stat_user_tables s 
                 ON s.schemaname = t.table_schema 
@@ -382,7 +390,7 @@ impl DbAdapter for PostgresAdapter {
 
     async fn list_foreign_keys(&self, db_name: &str) -> Result<Vec<ForeignKey>> {
         let query = r#"
-            SELECT
+            SELECT DISTINCT
                 tc.constraint_name,
                 tc.table_schema as source_schema,
                 tc.table_name as source_table,
@@ -391,16 +399,21 @@ impl DbAdapter for PostgresAdapter {
                 ccu.table_name as target_table,
                 ccu.column_name as target_column,
                 rc.delete_rule,
-                rc.update_rule
+                rc.update_rule,
+                kcu.ordinal_position
             FROM information_schema.table_constraints tc
             JOIN information_schema.key_column_usage kcu
                 ON tc.constraint_name = kcu.constraint_name
                 AND tc.table_schema = kcu.table_schema
+                AND tc.constraint_schema = kcu.constraint_schema
             JOIN information_schema.constraint_column_usage ccu
                 ON ccu.constraint_name = tc.constraint_name
+                AND ccu.constraint_schema = tc.constraint_schema
             JOIN information_schema.referential_constraints rc
                 ON tc.constraint_name = rc.constraint_name
+                AND tc.constraint_schema = rc.constraint_schema
             WHERE tc.constraint_type = 'FOREIGN KEY'
+                AND tc.table_schema NOT IN ('pg_catalog', 'information_schema')
             ORDER BY tc.constraint_name, kcu.ordinal_position
         "#;
 
