@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
+use db_viewer_core::adapter::DbAdapter;
 use db_viewer_core::domain::{Dump, DumpStatus};
 
 /// Create dump request
@@ -352,6 +353,90 @@ pub async fn get_dump_databases(
             id
         ))),
     }
+}
+
+/// Delete a dump and clean up associated resources
+pub async fn delete_dump(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<serde_json::Value>> {
+    // Get dump info
+    let row = sqlx::query(
+        r#"
+        SELECT sandbox_db_name, sandbox_databases, status
+        FROM dumps
+        WHERE id = $1 AND status != 'DELETED'
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await?;
+
+    let row = row.ok_or_else(|| ApiError::NotFound(format!("Dump {} not found", id)))?;
+
+    let sandbox_db_name: Option<String> = row.get("sandbox_db_name");
+    let sandbox_databases: Option<Vec<String>> = row.get("sandbox_databases");
+    let status: String = row.get("status");
+
+    // Drop sandbox databases if they exist
+    if let Some(ref db_name) = sandbox_db_name {
+        if status != "CREATED" && status != "UPLOADED" {
+            // Build sandbox DB URL
+            let sandbox_url = if let Some(ref password) = state.config.sandbox_password {
+                format!(
+                    "postgres://{}:{}@{}:{}/postgres",
+                    state.config.sandbox_user,
+                    password,
+                    state.config.sandbox_host,
+                    state.config.sandbox_port
+                )
+            } else {
+                format!(
+                    "postgres://{}@{}:{}/postgres",
+                    state.config.sandbox_user, state.config.sandbox_host, state.config.sandbox_port
+                )
+            };
+
+            let sandbox_pool = sqlx::PgPool::connect(&sandbox_url)
+                .await
+                .map_err(|e| ApiError::Internal(format!("Failed to connect to sandbox: {}", e)))?;
+
+            let adapter = db_viewer_core::adapter::postgres::PostgresAdapter::new(
+                sandbox_pool,
+                state.config.sandbox_host.clone(),
+                state.config.sandbox_port,
+                state.config.sandbox_user.clone(),
+                state.config.sandbox_password.clone(),
+            );
+
+            // Drop all databases in sandbox_databases array
+            if let Some(dbs) = sandbox_databases {
+                for db in dbs {
+                    let _ = adapter.drop_database(&db).await; // Ignore errors
+                }
+            } else {
+                // Fallback to primary database
+                let _ = adapter.drop_database(db_name).await; // Ignore errors
+            }
+        }
+    }
+
+    // Delete associated records (cascade will handle dump_schemas, value_stats)
+    sqlx::query("DELETE FROM dumps WHERE id = $1")
+        .bind(id)
+        .execute(&state.db_pool)
+        .await?;
+
+    // Delete upload files
+    let upload_dir = std::path::Path::new(&state.config.upload_dir).join(id.to_string());
+    if upload_dir.exists() {
+        let _ = std::fs::remove_dir_all(&upload_dir); // Ignore errors
+    }
+
+    Ok(Json(serde_json::json!({
+        "success": true,
+        "message": "Dump deleted successfully"
+    })))
 }
 
 #[cfg(test)]

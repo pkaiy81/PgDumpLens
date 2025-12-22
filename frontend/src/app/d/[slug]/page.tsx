@@ -1,9 +1,10 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { SchemaExplorer } from '@/components/SchemaExplorer';
+import SearchResults from '@/components/SearchResults';
 
 interface Dump {
   id: string;
@@ -74,6 +75,7 @@ function formatDate(dateString: string): string {
 
 export default function DumpDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const slug = params.slug as string;
 
   const [dump, setDump] = useState<Dump | null>(null);
@@ -83,6 +85,9 @@ export default function DumpDetailPage() {
   const [loading, setLoading] = useState(true);
   const [schemaLoading, setSchemaLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [activeTab, setActiveTab] = useState<'schema' | 'search'>('schema');
 
   const fetchDump = useCallback(async () => {
     try {
@@ -141,6 +146,30 @@ export default function DumpDetailPage() {
       fetchSchema(dump.id, newDb);
     }
   }, [dump, selectedDb, fetchSchema]);
+
+  // Handle dump deletion
+  const handleDelete = async () => {
+    if (!dump) return;
+    
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/dumps/${dump.id}`, {
+        method: 'DELETE',
+      });
+
+      if (!res.ok) {
+        throw new Error('Failed to delete dump');
+      }
+
+      // Redirect to home page after successful deletion
+      router.push('/');
+    } catch (err) {
+      console.error('Delete error:', err);
+      setError(err instanceof Error ? err.message : 'Failed to delete dump');
+      setDeleting(false);
+      setShowDeleteConfirm(false);
+    }
+  };
 
   useEffect(() => {
     let interval: NodeJS.Timeout | null = null;
@@ -275,8 +304,57 @@ export default function DumpDetailPage() {
               <span>⏰ Expires: {formatDate(dump.expires_at)}</span>
             </div>
           </div>
+          
+          {/* Delete Button */}
+          <button
+            onClick={() => setShowDeleteConfirm(true)}
+            className="px-4 py-2 text-sm font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg transition-colors"
+          >
+            🗑️ Delete
+          </button>
         </div>
       </div>
+
+      {/* Delete Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div 
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => !deleting && setShowDeleteConfirm(false)}
+          />
+          <div className="relative bg-white dark:bg-slate-800 rounded-2xl shadow-2xl p-6 max-w-md m-4">
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-white mb-2">
+              Delete Dump?
+            </h3>
+            <p className="text-slate-600 dark:text-slate-400 mb-4">
+              This will permanently delete the dump <strong>{dump.name || 'Untitled'}</strong> and all associated data. This action cannot be undone.
+            </p>
+            <div className="flex gap-3 justify-end">
+              <button
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={deleting}
+                className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleDelete}
+                disabled={deleting}
+                className="px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {deleting ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    Deleting...
+                  </>
+                ) : (
+                  'Delete'
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Schema Explorer */}
       {dump.status === 'READY' && schema ? (
@@ -313,12 +391,50 @@ export default function DumpDetailPage() {
               </div>
             </div>
           )}
-          <SchemaExplorer 
-            dumpId={dump.id}
-            schemaGraph={schema.schema_graph}
-            fullMermaidER={schema.mermaid_er}
-            selectedDatabase={selectedDb || undefined}
-          />
+
+          {/* Tab Navigation */}
+          <div className="bg-white dark:bg-slate-800 rounded-2xl border border-slate-200 dark:border-slate-700">
+            <div className="border-b border-slate-200 dark:border-slate-700">
+              <nav className="flex gap-4 px-6">
+                <button
+                  onClick={() => setActiveTab('schema')}
+                  className={`py-4 px-2 font-medium text-sm border-b-2 transition-colors ${
+                    activeTab === 'schema'
+                      ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                      : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'
+                  }`}
+                >
+                  📊 Schema Explorer
+                </button>
+                <button
+                  onClick={() => setActiveTab('search')}
+                  className={`py-4 px-2 font-medium text-sm border-b-2 transition-colors ${
+                    activeTab === 'search'
+                      ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                      : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'
+                  }`}
+                >
+                  🔍 Full-Text Search
+                </button>
+              </nav>
+            </div>
+
+            <div className="p-6">
+              {activeTab === 'schema' ? (
+                <SchemaExplorer 
+                  dumpId={dump.id}
+                  schemaGraph={schema.schema_graph}
+                  fullMermaidER={schema.mermaid_er}
+                  selectedDatabase={selectedDb || undefined}
+                />
+              ) : (
+                <SearchResults 
+                  dumpId={dump.id}
+                  databases={databases?.databases}
+                />
+              )}
+            </div>
+          </div>
         </>
       ) : dump.status === 'ERROR' ? (
         <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-2xl p-6">

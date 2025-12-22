@@ -5,6 +5,7 @@ import { MermaidDiagram } from './MermaidDiagram';
 import { RiskBadge } from './RiskBadge';
 import { DataTable } from './DataTable';
 import { RelationshipExplorer } from './RelationshipExplorer';
+import { JsonViewer } from './JsonViewer';
 
 interface Column {
   name: string;
@@ -170,16 +171,46 @@ export function SchemaExplorer({ dumpId, schemaGraph, fullMermaidER, selectedDat
     value: unknown;
   }>({ isOpen: false, column: '', value: null });
 
+  // State for JSON viewer
+  const [jsonViewer, setJsonViewer] = useState<{
+    isOpen: boolean;
+    column: string;
+    value: unknown;
+  }>({ isOpen: false, column: '', value: null });
+
+  // Check if value is JSON
+  const isJsonValue = useCallback((val: unknown): boolean => {
+    if (typeof val === 'object' && val !== null) return true;
+    if (typeof val === 'string') {
+      try {
+        JSON.parse(val);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    return false;
+  }, []);
+
   // Handle cell click in DataTable
   const handleCellClick = useCallback((column: string, value: unknown) => {
     if (selectedTable) {
-      setRelationshipExplorer({
-        isOpen: true,
-        column,
-        value,
-      });
+      // If value is JSON, open JSON viewer instead of relationship explorer
+      if (isJsonValue(value)) {
+        setJsonViewer({
+          isOpen: true,
+          column,
+          value,
+        });
+      } else {
+        setRelationshipExplorer({
+          isOpen: true,
+          column,
+          value,
+        });
+      }
     }
-  }, [selectedTable]);
+  }, [selectedTable, isJsonValue]);
 
   // Get unique schemas with table counts
   const schemas = useMemo(() => {
@@ -711,7 +742,7 @@ export function SchemaExplorer({ dumpId, schemaGraph, fullMermaidER, selectedDat
                 <>
                   <div className="mb-4 p-3 bg-indigo-50 dark:bg-indigo-900/20 rounded-lg border border-indigo-200 dark:border-indigo-800">
                     <p className="text-sm text-indigo-700 dark:text-indigo-300">
-                      💡 <strong>Tip:</strong> Click any cell to explore its relationships and view SQL examples
+                      💡 <strong>Tip:</strong> Click any cell to explore relationships or view formatted JSON
                     </p>
                   </div>
                   <DataTable 
@@ -741,6 +772,18 @@ export function SchemaExplorer({ dumpId, schemaGraph, fullMermaidER, selectedDat
           table={selectedTable.table_name}
           column={relationshipExplorer.column}
           value={relationshipExplorer.value}
+        />
+      )}
+
+      {/* JSON Viewer Modal */}
+      {selectedTable && (
+        <JsonViewer
+          isOpen={jsonViewer.isOpen}
+          onClose={() => setJsonViewer({ isOpen: false, column: '', value: null })}
+          schema={selectedTable.schema_name}
+          table={selectedTable.table_name}
+          column={jsonViewer.column}
+          value={jsonViewer.value}
         />
       )}
     </div>

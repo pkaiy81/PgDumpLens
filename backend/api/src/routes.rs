@@ -2,7 +2,7 @@
 
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{get, post, put},
+    routing::{delete, get, post, put},
     Router,
 };
 use tower_http::cors::{Any, CorsLayer};
@@ -28,6 +28,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/dumps", post(handlers::dumps::create_dump))
         .route("/api/dumps", get(handlers::dumps::list_dumps))
         .route("/api/dumps/:id", get(handlers::dumps::get_dump))
+        .route("/api/dumps/:id", delete(handlers::dumps::delete_dump))
         .route(
             "/api/dumps/:id/upload",
             put(handlers::dumps::upload_dump).layer(DefaultBodyLimit::max(MAX_UPLOAD_SIZE)),
@@ -49,6 +50,11 @@ pub fn create_router(state: AppState) -> Router {
         .route(
             "/api/dumps/:id/suggest",
             get(handlers::schema::suggest_values),
+        )
+        // Search
+        .route(
+            "/api/dumps/:id/search",
+            get(handlers::search::search_in_dump),
         )
         // Relationships & Risk
         .route(

@@ -4,6 +4,7 @@ pub mod dumps;
 pub mod relation;
 pub mod risk;
 pub mod schema;
+pub mod search;
 
 use axum::Json;
 use serde::Serialize;
