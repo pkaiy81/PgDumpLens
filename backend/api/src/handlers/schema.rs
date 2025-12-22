@@ -71,14 +71,27 @@ pub async fn get_schema(
 
         db.clone()
     } else {
-        // Get primary database name
-        let row = sqlx::query("SELECT sandbox_db_name FROM dumps WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&state.db_pool)
-            .await?
-            .ok_or_else(|| ApiError::NotFound(format!("Dump {} not found", id)))?;
+        // Get primary database name or first available database
+        let row = sqlx::query(
+            r#"
+            SELECT sandbox_db_name, sandbox_databases
+            FROM dumps
+            WHERE id = $1
+            "#,
+        )
+        .bind(id)
+        .fetch_optional(&state.db_pool)
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Dump {} not found", id)))?;
 
-        row.get("sandbox_db_name")
+        let sandbox_db_name: Option<String> = row.get("sandbox_db_name");
+        let sandbox_databases: Option<Vec<String>> = row.get("sandbox_databases");
+
+        // Prefer sandbox_databases[0] for multi-database dumps, fall back to sandbox_db_name
+        sandbox_databases
+            .and_then(|dbs| dbs.first().cloned())
+            .or(sandbox_db_name)
+            .ok_or_else(|| ApiError::NotFound(format!("No database found for dump {}", id)))?
     };
 
     // Fetch cached schema from metadata DB

@@ -66,8 +66,8 @@ docker compose up -d
 
 これにより以下が起動します:
 
-- **API Server**: http://localhost:8080
-- **Frontend**: http://localhost:3000
+- **API Server**: <http://localhost:8080>
+- **Frontend**: <http://localhost:3000>
 - **Metadata DB**: localhost:5432
 - **Sandbox DB**: localhost:5433
 - **Worker**: バックグラウンドジョブ処理
@@ -116,7 +116,7 @@ cd frontend
 yarn install && yarn dev
 ```
 
-アプリが http://localhost:3000 で起動します。
+アプリが <http://localhost:3000> で起動します。
 
 ## 📁 プロジェクト構成
 
@@ -429,6 +429,7 @@ curl http://localhost:${HTTP_PORT}/health
 ```
 
 > **📝 Note:** `.env` ファイルは環境に応じて以下の項目をカスタマイズしてください：
+>
 > - `HTTP_PORT`: 制限環境でポート80が使用できない場合に変更（例: 8080）
 > - `DB_PASSWORD` / `SANDBOX_PASSWORD`: 本番環境では必ずデフォルト値から変更
 > - `UPLOAD_DIR`: ダンプファイルの保存先パス
@@ -597,6 +598,88 @@ kubectl get svc -n pgdumplens
 | `/api/dumps/{id}/risk/table/{schema}/{table}`           | GET      | テーブルリスク評価         |
 | `/api/dumps/{id}/risk/column/{schema}/{table}/{column}` | GET      | カラムリスク評価           |
 | `/api/dumps/by-slug/{slug}`                             | GET      | Slug でダンプ取得          |
+
+## 🎯 リスク評価ロジック
+
+PgDumpLensは、データの変更・削除時の影響範囲を自動的に評価し、0-100のスコアで可視化します。
+
+### リスクスコア計算 (0-100点)
+
+#### 📊 テーブルレベルリスク (`calculate_table_risk`)
+
+テーブル全体への操作（一括削除、トランケートなど）のリスクを評価します。
+
+| 評価項目                             | 配点               | 説明                                             |
+| ------------------------------------ | ------------------ | ------------------------------------------------ |
+| Inbound外部キー数                    | 各10点（最大30点） | このテーブルを参照している外部キーの数           |
+| CASCADE削除動作                      | 各15点（最大30点） | ON DELETE CASCADE の外部キー数（連鎖削除が発生） |
+| RESTRICT/NoAction                    | 10点               | 削除をブロックする外部キーが存在                 |
+| 大規模テーブル（>10,000行）          | 10点               | 処理に時間がかかる可能性                         |
+| 主キーで他テーブルから参照されている | 10点               | 重要な参照元テーブルの可能性                     |
+
+**実装**: `backend/core/src/risk.rs` の `calculate_table_risk()`
+
+#### 🔍 カラムレベルリスク (`calculate_column_risk`)
+
+特定の値の変更・削除時のリスクを評価します（Relationship Explorerで使用）。
+
+| 評価項目              | 配点   | 説明                                       |
+| --------------------- | ------ | ------------------------------------------ |
+| **参照行数**          |        | この値を参照している他テーブルの行数       |
+| └ 1-10行              | 10点   | 影響範囲が小さい                           |
+| └ 11-100行            | 20点   | 中程度の影響                               |
+| └ 101-1,000行         | 30点   | 広範囲への影響                             |
+| └ 1,000行以上         | 40点   | 非常に広範囲への影響                       |
+| CASCADE動作の外部キー | 各20点 | この値の削除が他テーブルの行を連鎖削除する |
+| 主キー列              | 15点   | テーブルの識別子として使用されている       |
+
+**実装**: `backend/core/src/risk.rs` の `calculate_column_risk()`
+
+### リスクレベル分類
+
+スコアに応じて4段階に分類され、UIで色分け表示されます。
+
+| レベル       | スコア範囲 | 色   | 説明                                      |
+| ------------ | ---------- | ---- | ----------------------------------------- |
+| **Low**      | 0-25       | 🟢 緑 | 影響範囲が限定的、安全に実行可能          |
+| **Medium**   | 26-50      | 🟡 黄 | 中程度の影響、注意して実行                |
+| **High**     | 51-75      | 🟠 橙 | 広範囲への影響、十分な確認が必要          |
+| **Critical** | 76-100     | 🔴 赤 | 重大な影響、CASCADE連鎖削除の危険性が高い |
+
+### 使用例
+
+#### Relationship Explorerでの表示
+
+```text
+users.id = 123 をクリック
+
+[Inbound References]
+├─ orders → users
+│  Risk: 65/100 (High) 🟠
+│  • 450 row(s) in other tables reference this value
+│  • Deletion will cascade to public.orders
+│  • This is a primary key column
+│
+└─ audit_logs → users
+   Risk: 20/100 (Low) 🟢
+   • 15 row(s) in other tables reference this value
+```
+
+#### APIレスポンス例
+
+```json
+{
+  "score": 65,
+  "level": "high",
+  "reasons": [
+    "450 row(s) in other tables reference this value",
+    "Deletion will cascade to public.orders",
+    "This is a primary key column"
+  ]
+}
+```
+
+このリスク評価により、データベース操作の影響範囲を事前に把握し、安全なデータ管理を実現します。
 
 ## 📄 ライセンス
 

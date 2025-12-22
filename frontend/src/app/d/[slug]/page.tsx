@@ -108,16 +108,12 @@ export default function DumpDetailPage() {
       }
       const data: DatabaseList = await res.json();
       setDatabases(data);
-      // Auto-select primary database or first available
-      if (!selectedDb) {
-        setSelectedDb(data.primary || (data.databases.length > 0 ? data.databases[0] : null));
-      }
       return data;
     } catch (err) {
       console.error('Databases fetch error:', err);
       return null;
     }
-  }, [selectedDb]);
+  }, []);
 
   const fetchSchema = useCallback(async (dumpId: string, database?: string) => {
     try {
@@ -157,9 +153,14 @@ export default function DumpDetailPage() {
         if (dumpData.status === 'READY') {
           // Fetch available databases first
           const dbList = await fetchDatabases(dumpData.id);
-          // Then fetch schema (use first database if multiple available)
+          // Determine which database to use
           const dbToUse = dbList?.primary || (dbList?.databases && dbList.databases.length > 0 ? dbList.databases[0] : undefined);
-          await fetchSchema(dumpData.id, dbToUse || undefined);
+          // Set selected database if not already set
+          if (dbToUse && !selectedDb) {
+            setSelectedDb(dbToUse);
+          }
+          // Fetch schema for the selected or default database
+          await fetchSchema(dumpData.id, dbToUse);
           setLoading(false);
         } else if (dumpData.status === 'RESTORING' || dumpData.status === 'UPLOADED' || dumpData.status === 'ANALYZING') {
           interval = setInterval(async () => {
@@ -167,7 +168,10 @@ export default function DumpDetailPage() {
             if (updated && updated.status === 'READY') {
               const dbList = await fetchDatabases(updated.id);
               const dbToUse = dbList?.primary || (dbList?.databases && dbList.databases.length > 0 ? dbList.databases[0] : undefined);
-              await fetchSchema(updated.id, dbToUse || undefined);
+              if (dbToUse && !selectedDb) {
+                setSelectedDb(dbToUse);
+              }
+              await fetchSchema(updated.id, dbToUse);
               setLoading(false);
               if (interval) clearInterval(interval);
             } else if (updated && updated.status === 'ERROR') {
