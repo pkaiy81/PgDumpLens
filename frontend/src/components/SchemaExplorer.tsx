@@ -70,6 +70,54 @@ function computeTableRelations(tables: Table[], foreignKeys: ForeignKey[]) {
   return relations;
 }
 
+// Compute column-level FK relations for a specific table
+interface ColumnRelationInfo {
+  hasOutbound: boolean;  // This column references another table
+  hasInbound: boolean;   // This column is referenced by other tables
+  outboundTables: string[];
+  inboundTables: string[];
+}
+
+function computeColumnRelations(
+  schema: string,
+  table: string,
+  foreignKeys: ForeignKey[]
+): Record<string, ColumnRelationInfo> {
+  const relations: Record<string, ColumnRelationInfo> = {};
+  
+  for (const fk of foreignKeys) {
+    // Outbound: this table references another table
+    if (fk.source_schema === schema && fk.source_table === table) {
+      for (const col of fk.source_columns) {
+        if (!relations[col]) {
+          relations[col] = { hasOutbound: false, hasInbound: false, outboundTables: [], inboundTables: [] };
+        }
+        relations[col].hasOutbound = true;
+        const targetTable = `${fk.target_schema}.${fk.target_table}`;
+        if (!relations[col].outboundTables.includes(targetTable)) {
+          relations[col].outboundTables.push(targetTable);
+        }
+      }
+    }
+    
+    // Inbound: another table references this table
+    if (fk.target_schema === schema && fk.target_table === table) {
+      for (const col of fk.target_columns) {
+        if (!relations[col]) {
+          relations[col] = { hasOutbound: false, hasInbound: false, outboundTables: [], inboundTables: [] };
+        }
+        relations[col].hasInbound = true;
+        const sourceTable = `${fk.source_schema}.${fk.source_table}`;
+        if (!relations[col].inboundTables.includes(sourceTable)) {
+          relations[col].inboundTables.push(sourceTable);
+        }
+      }
+    }
+  }
+  
+  return relations;
+}
+
 // Generate Mermaid ER for a single table and its relations
 function generateTableRelationshipER(
   table: Table,
@@ -751,6 +799,11 @@ export function SchemaExplorer({ dumpId, schemaGraph, fullMermaidER, selectedDat
                     table={selectedTable.table_name} 
                     database={selectedDatabase}
                     onCellClick={handleCellClick}
+                    columnRelations={computeColumnRelations(
+                      selectedTable.schema_name,
+                      selectedTable.table_name,
+                      schemaGraph.foreign_keys
+                    )}
                   />
                 </>
               ) : (
@@ -772,6 +825,7 @@ export function SchemaExplorer({ dumpId, schemaGraph, fullMermaidER, selectedDat
           table={selectedTable.table_name}
           column={relationshipExplorer.column}
           value={relationshipExplorer.value}
+          database={selectedDatabase}
         />
       )}
 

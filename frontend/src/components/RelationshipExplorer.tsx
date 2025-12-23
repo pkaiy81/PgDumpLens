@@ -29,6 +29,7 @@ interface RelationshipExplorerProps {
   table: string;
   column: string;
   value: unknown;
+  database?: string;
 }
 
 export function RelationshipExplorer({
@@ -39,6 +40,7 @@ export function RelationshipExplorer({
   table,
   column,
   value,
+  database,
 }: RelationshipExplorerProps) {
   const [data, setData] = useState<ExplainRelationResponse | null>(null);
   const [loading, setLoading] = useState(false);
@@ -61,6 +63,7 @@ export function RelationshipExplorer({
             column,
             value,
             max_hops: 2,
+            database,
           }),
         });
 
@@ -78,7 +81,7 @@ export function RelationshipExplorer({
     };
 
     fetchRelationships();
-  }, [isOpen, dumpId, schema, table, column, value]);
+  }, [isOpen, dumpId, schema, table, column, value, database]);
 
   const handleCopySQL = async (sql: string, index: number) => {
     try {

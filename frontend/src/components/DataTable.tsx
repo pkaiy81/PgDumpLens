@@ -2,11 +2,19 @@
 
 import { useState, useEffect, useCallback } from 'react';
 
+interface ColumnRelationInfo {
+  hasOutbound: boolean;  // This column references another table
+  hasInbound: boolean;   // This column is referenced by other tables
+  outboundTables: string[];  // List of tables this column references
+  inboundTables: string[];   // List of tables that reference this column
+}
+
 interface DataTableProps {
   dumpId: string;
   schema: string;
   table: string;
   database?: string;
+  columnRelations?: Record<string, ColumnRelationInfo>;
   onCellClick?: (column: string, value: unknown, row: Record<string, unknown>) => void;
 }
 
@@ -27,7 +35,7 @@ interface ColumnFilter {
   value: string;
 }
 
-export function DataTable({ dumpId, schema, table, database, onCellClick }: DataTableProps) {
+export function DataTable({ dumpId, schema, table, database, columnRelations, onCellClick }: DataTableProps) {
   const [data, setData] = useState<TableData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -186,10 +194,31 @@ export function DataTable({ dumpId, schema, table, database, onCellClick }: Data
         <table className="data-table w-full text-sm">
           <thead>
             <tr className="border-b border-slate-200 dark:border-slate-700">
-              {data.columns.map((col) => (
+              {data.columns.map((col) => {
+                const relInfo = columnRelations?.[col];
+                const hasRelations = relInfo?.hasOutbound || relInfo?.hasInbound;
+                
+                return (
                 <th key={col} className="relative text-left py-2 px-3 text-slate-500 dark:text-slate-400 font-medium whitespace-nowrap">
                   <div className="flex items-center gap-1">
-                    <span>{col}</span>
+                    {/* Relation indicators */}
+                    {relInfo?.hasInbound && (
+                      <span 
+                        className="text-blue-500 dark:text-blue-400" 
+                        title={`Referenced by: ${relInfo.inboundTables.join(', ')}`}
+                      >
+                        ⬅️
+                      </span>
+                    )}
+                    {relInfo?.hasOutbound && (
+                      <span 
+                        className="text-purple-500 dark:text-purple-400" 
+                        title={`References: ${relInfo.outboundTables.join(', ')}`}
+                      >
+                        🔗
+                      </span>
+                    )}
+                    <span className={hasRelations ? 'font-semibold text-slate-700 dark:text-slate-200' : ''}>{col}</span>
                     <button
                       onClick={() => handleFilterClick(col)}
                       className={`p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 ${
@@ -246,7 +275,8 @@ export function DataTable({ dumpId, schema, table, database, onCellClick }: Data
                     </div>
                   )}
                 </th>
-              ))}
+              );
+              })}
             </tr>
           </thead>
           <tbody>

@@ -24,6 +24,8 @@ pub struct ExplainRelationRequest {
     pub column: String,
     pub value: serde_json::Value,
     pub max_hops: Option<usize>,
+    /// Optional database name for multi-database dumps
+    pub database: Option<String>,
 }
 
 /// Explain relation response
@@ -41,11 +43,40 @@ pub async fn explain_relation(
 ) -> ApiResult<Json<ExplainRelationResponse>> {
     let _max_hops = req.max_hops.unwrap_or(2).min(5);
 
-    // Fetch schema graph
-    let schema_row = sqlx::query("SELECT schema_graph FROM dump_schemas WHERE dump_id = $1")
+    // Determine which database to use
+    let database_name = if let Some(ref db) = req.database {
+        db.clone()
+    } else {
+        // Get primary database name or first available database
+        let row = sqlx::query(
+            r#"
+            SELECT sandbox_db_name, sandbox_databases
+            FROM dumps
+            WHERE id = $1
+            "#,
+        )
         .bind(id)
         .fetch_optional(&state.db_pool)
-        .await?;
+        .await?
+        .ok_or_else(|| ApiError::NotFound(format!("Dump {} not found", id)))?;
+
+        let sandbox_db_name: Option<String> = row.get("sandbox_db_name");
+        let sandbox_databases: Option<Vec<String>> = row.get("sandbox_databases");
+
+        sandbox_databases
+            .and_then(|dbs| dbs.first().cloned())
+            .or(sandbox_db_name)
+            .ok_or_else(|| ApiError::NotFound(format!("No database found for dump {}", id)))?
+    };
+
+    // Fetch schema graph for the specific database
+    let schema_row = sqlx::query(
+        "SELECT schema_graph FROM dump_schemas WHERE dump_id = $1 AND database_name = $2",
+    )
+    .bind(id)
+    .bind(&database_name)
+    .fetch_optional(&state.db_pool)
+    .await?;
 
     let schema_graph: SchemaGraph = match schema_row {
         Some(row) => {
