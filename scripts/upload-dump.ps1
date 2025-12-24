@@ -1,5 +1,5 @@
 # PgDumpLens CLI Upload Script (PowerShell)
-# Usage: .\scripts\upload-dump.ps1 -DumpFile <path> [-Name <name>] [-ServerUrl <url>]
+# Usage: .\scripts\upload-dump.ps1 -DumpFile <path> [-Name <name>] [-ServerUrl <url>] [-Public]
 
 [CmdletBinding()]
 param(
@@ -11,10 +11,16 @@ param(
     [string]$Name,
 
     [Parameter(Position = 2)]
-    [string]$ServerUrl = "http://localhost:8080"
+    [string]$ServerUrl = "http://localhost:8080",
+
+    [Parameter()]
+    [switch]$Public  # Default to private; use -Public to show in Recent Dumps
 )
 
 $ErrorActionPreference = "Stop"
+
+# Default to private for script uploads
+$IsPrivate = -not $Public
 
 # Colors
 function Write-Info { param($Message) Write-Host "[INFO] $Message" -ForegroundColor Green }
@@ -34,18 +40,39 @@ Write-Info "  File: $DumpFile"
 Write-Info "  Name: $Name"
 Write-Info "  Size: ${FileSizeMB}MB"
 Write-Info "  Server: $ServerUrl"
+Write-Info "  Private: $IsPrivate"
 
 try {
-    # Create multipart form data
+    # Step 1: Create dump session
+    Write-Info "Creating dump session..."
+    $createBody = @{
+        name = $Name
+        is_private = $IsPrivate
+    } | ConvertTo-Json
+
+    $createResponse = Invoke-RestMethod -Uri "$ServerUrl/api/dumps" `
+        -Method Post `
+        -ContentType "application/json" `
+        -Body $createBody
+
+    $dumpId = $createResponse.id
+    $uploadUrl = $createResponse.upload_url
+    $slug = $createResponse.slug
+
+    if (-not $dumpId -or -not $uploadUrl) {
+        Write-Err "Failed to create dump session"
+        exit 1
+    }
+
+    Write-Info "Dump ID: $dumpId"
+
+    # Step 2: Upload file using multipart
+    Write-Info "Uploading file..."
     $boundary = [System.Guid]::NewGuid().ToString()
     $fileBytes = [System.IO.File]::ReadAllBytes($FileInfo.FullName)
     $fileEnc = [System.Text.Encoding]::GetEncoding("iso-8859-1").GetString($fileBytes)
     
-    $bodyLines = @(
-        "--$boundary",
-        "Content-Disposition: form-data; name=`"name`"",
-        "",
-        $Name,
+    $uploadBodyLines = @(
         "--$boundary",
         "Content-Disposition: form-data; name=`"file`"; filename=`"$($FileInfo.Name)`"",
         "Content-Type: application/octet-stream",
@@ -53,20 +80,29 @@ try {
         $fileEnc,
         "--$boundary--"
     )
-    $body = $bodyLines -join "`r`n"
+    $uploadBody = $uploadBodyLines -join "`r`n"
 
-    # Upload
-    $response = Invoke-RestMethod -Uri "$ServerUrl/api/dumps" `
-        -Method Post `
+    Invoke-RestMethod -Uri "$ServerUrl$uploadUrl" `
+        -Method Put `
         -ContentType "multipart/form-data; boundary=$boundary" `
-        -Body $body
+        -Body $uploadBody | Out-Null
+
+    # Step 3: Trigger restore
+    Write-Info "Triggering analysis..."
+    try {
+        Invoke-RestMethod -Uri "$ServerUrl/api/dumps/$dumpId/restore" -Method Post | Out-Null
+    }
+    catch {
+        Write-Warn "Failed to trigger analysis, but upload was successful"
+    }
 
     Write-Info "Upload successful!"
-    $dumpId = $response.id
-    if (-not $dumpId) { $dumpId = $response.dump_id }
-    
-    Write-Info "Dump ID: $dumpId"
-    Write-Info "View in browser: $ServerUrl/?dump=$dumpId"
+    if ($slug) {
+        Write-Info "View in browser: $ServerUrl/d/$slug"
+    }
+    else {
+        Write-Info "Dump ID: $dumpId"
+    }
 
     # Wait for analysis
     Write-Info "Waiting for analysis to complete..."

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { Upload, FileUp, Loader2 } from 'lucide-react';
+import { Upload, FileUp, Loader2, Eye, EyeOff } from 'lucide-react';
 
 interface FileUploadProps {
   onUploadComplete: (dumpId: string, slug: string) => void;
@@ -13,6 +13,7 @@ export function FileUpload({ onUploadComplete }: FileUploadProps) {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState('');
+  const [isPrivate, setIsPrivate] = useState(false);
 
   const handleUpload = useCallback(async (file: File) => {
     setIsUploading(true);
@@ -24,7 +25,10 @@ export function FileUpload({ onUploadComplete }: FileUploadProps) {
       const createRes = await fetch('/api/dumps', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name || file.name }),
+        body: JSON.stringify({ 
+          name: name || file.name,
+          is_private: isPrivate,
+        }),
       });
 
       if (!createRes.ok) {
@@ -65,7 +69,7 @@ export function FileUpload({ onUploadComplete }: FileUploadProps) {
     } finally {
       setIsUploading(false);
     }
-  }, [name, onUploadComplete]);
+  }, [name, isPrivate, onUploadComplete]);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -100,6 +104,44 @@ export function FileUpload({ onUploadComplete }: FileUploadProps) {
           disabled={isUploading}
         />
       </div>
+
+      {/* Private option */}
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => setIsPrivate(!isPrivate)}
+          disabled={isUploading}
+          className={`
+            relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent 
+            transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2
+            ${isPrivate ? 'bg-indigo-600' : 'bg-slate-200 dark:bg-slate-700'}
+            ${isUploading ? 'opacity-50 cursor-not-allowed' : ''}
+          `}
+        >
+          <span
+            className={`
+              pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 
+              transition duration-200 ease-in-out
+              ${isPrivate ? 'translate-x-5' : 'translate-x-0'}
+            `}
+          />
+        </button>
+        <div className="flex items-center gap-2">
+          {isPrivate ? (
+            <EyeOff className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+          ) : (
+            <Eye className="w-4 h-4 text-slate-400" />
+          )}
+          <label className="text-sm font-medium text-slate-700 dark:text-slate-300">
+            Private upload
+          </label>
+        </div>
+      </div>
+      {isPrivate && (
+        <p className="text-xs text-slate-500 dark:text-slate-400 -mt-4 ml-14">
+          This dump will not appear in &quot;Recent Dumps&quot;. Only those with the URL can access it.
+        </p>
+      )}
 
       <div
         onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}

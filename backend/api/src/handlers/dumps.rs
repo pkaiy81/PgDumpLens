@@ -19,6 +19,8 @@ use db_viewer_core::domain::{Dump, DumpStatus};
 pub struct CreateDumpRequest {
     pub name: Option<String>,
     pub slug: Option<String>,
+    /// If true, the dump will not appear in the "Recent Dumps" list
+    pub is_private: Option<bool>,
 }
 
 /// Create dump response
@@ -59,10 +61,11 @@ pub async fn create_dump(
     }
 
     // Insert dump record
+    let is_private = req.is_private.unwrap_or(false);
     sqlx::query(
         r#"
-        INSERT INTO dumps (id, slug, name, status, created_at, updated_at, expires_at)
-        VALUES ($1, $2, $3, $4, $5, $5, $6)
+        INSERT INTO dumps (id, slug, name, status, created_at, updated_at, expires_at, is_private)
+        VALUES ($1, $2, $3, $4, $5, $5, $6, $7)
         "#,
     )
     .bind(id)
@@ -71,6 +74,7 @@ pub async fn create_dump(
     .bind(DumpStatus::Created.as_str())
     .bind(now)
     .bind(expires_at)
+    .bind(is_private)
     .execute(&state.db_pool)
     .await?;
 
@@ -87,7 +91,7 @@ pub async fn list_dumps(State(state): State<AppState>) -> ApiResult<Json<Vec<Dum
         r#"
         SELECT id, slug, name, status, file_size, created_at, expires_at
         FROM dumps
-        WHERE status != 'DELETED'
+        WHERE status != 'DELETED' AND is_private = false
         ORDER BY created_at DESC
         LIMIT 100
         "#,

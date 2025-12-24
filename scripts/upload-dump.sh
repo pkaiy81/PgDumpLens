@@ -1,11 +1,28 @@
 #!/bin/bash
 # PgDumpLens CLI Upload Script
-# Usage: ./scripts/upload-dump.sh <dump_file> [name] [server_url]
+# Usage: ./scripts/upload-dump.sh <dump_file> [name] [server_url] [--public]
 
 set -e
 
 # Configuration
 DEFAULT_SERVER="http://localhost:8080"
+IS_PRIVATE="true"  # Default to private for script uploads
+
+# Parse arguments
+POSITIONAL_ARGS=()
+for arg in "$@"; do
+    case $arg in
+        --public)
+            IS_PRIVATE="false"
+            shift
+            ;;
+        *)
+            POSITIONAL_ARGS+=("$arg")
+            ;;
+    esac
+done
+set -- "${POSITIONAL_ARGS[@]}"
+
 SERVER_URL="${3:-$DEFAULT_SERVER}"
 
 # Colors
@@ -28,12 +45,15 @@ log_error() {
 }
 
 usage() {
-    echo "Usage: $0 <dump_file> [name] [server_url]"
+    echo "Usage: $0 <dump_file> [name] [server_url] [--public]"
     echo ""
     echo "Arguments:"
     echo "  dump_file    Path to the PostgreSQL dump file (required)"
     echo "  name         Name for the dump (optional, defaults to filename)"
     echo "  server_url   PgDumpLens API URL (optional, defaults to $DEFAULT_SERVER)"
+    echo ""
+    echo "Options:"
+    echo "  --public     Show this dump in \"Recent Dumps\" list (default: private)"
     echo ""
     echo "Supported formats:"
     echo "  - Plain SQL (.sql)"
@@ -43,7 +63,7 @@ usage() {
     echo "Examples:"
     echo "  $0 ./backup.sql"
     echo "  $0 ./production.dump 'Production Backup' http://pgdumplens.example.com"
-    echo "  $0 ./data.sql.gz 'Compressed Data'"
+    echo "  $0 ./data.sql.gz 'Compressed Data' http://localhost:8080 --public"
     exit 1
 }
 
@@ -83,32 +103,75 @@ log_info "  File: $DUMP_FILE"
 log_info "  Name: $DUMP_NAME"
 log_info "  Size: ${FILE_SIZE_MB}MB"
 log_info "  Server: $SERVER_URL"
+log_info "  Private: $IS_PRIVATE"
 
-# Upload file
-RESPONSE=$(curl -s -w "\n%{http_code}" \
+# Step 1: Create dump session
+log_info "Creating dump session..."
+CREATE_RESPONSE=$(curl -s -w "\n%{http_code}" \
     -X POST \
-    -F "file=@$DUMP_FILE" \
-    -F "name=$DUMP_NAME" \
+    -H "Content-Type: application/json" \
+    -d "{\"name\": \"$DUMP_NAME\", \"is_private\": $IS_PRIVATE}" \
     "${SERVER_URL}/api/dumps" 2>&1)
 
-HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
-BODY=$(echo "$RESPONSE" | sed '$d')
+CREATE_HTTP_CODE=$(echo "$CREATE_RESPONSE" | tail -n1)
+CREATE_BODY=$(echo "$CREATE_RESPONSE" | sed '$d')
 
-if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-    log_info "Upload successful!"
-    
-    if command -v jq &> /dev/null; then
-        DUMP_ID=$(echo "$BODY" | jq -r '.id // .dump_id // "unknown"')
-        log_info "Dump ID: $DUMP_ID"
-        echo ""
-        log_info "View in browser: ${SERVER_URL/api/}?dump=$DUMP_ID"
-    else
-        echo "$BODY"
-    fi
-else
-    log_error "Upload failed (HTTP $HTTP_CODE)"
-    echo "$BODY"
+if [ "$CREATE_HTTP_CODE" -lt 200 ] || [ "$CREATE_HTTP_CODE" -ge 300 ]; then
+    log_error "Failed to create dump session (HTTP $CREATE_HTTP_CODE)"
+    echo "$CREATE_BODY"
     exit 1
+fi
+
+if command -v jq &> /dev/null; then
+    DUMP_ID=$(echo "$CREATE_BODY" | jq -r '.id // "unknown"')
+    UPLOAD_URL=$(echo "$CREATE_BODY" | jq -r '.upload_url // ""')
+else
+    log_error "jq is required for this script"
+    exit 1
+fi
+
+if [ "$DUMP_ID" = "unknown" ] || [ -z "$UPLOAD_URL" ]; then
+    log_error "Failed to parse create response"
+    echo "$CREATE_BODY"
+    exit 1
+fi
+
+log_info "Dump ID: $DUMP_ID"
+
+# Step 2: Upload file
+log_info "Uploading file..."
+UPLOAD_RESPONSE=$(curl -s -w "\n%{http_code}" \
+    -X PUT \
+    -F "file=@$DUMP_FILE" \
+    "${SERVER_URL}${UPLOAD_URL}" 2>&1)
+
+UPLOAD_HTTP_CODE=$(echo "$UPLOAD_RESPONSE" | tail -n1)
+UPLOAD_BODY=$(echo "$UPLOAD_RESPONSE" | sed '$d')
+
+if [ "$UPLOAD_HTTP_CODE" -lt 200 ] || [ "$UPLOAD_HTTP_CODE" -ge 300 ]; then
+    log_error "Failed to upload file (HTTP $UPLOAD_HTTP_CODE)"
+    echo "$UPLOAD_BODY"
+    exit 1
+fi
+
+# Step 3: Trigger restore
+log_info "Triggering analysis..."
+RESTORE_RESPONSE=$(curl -s -w "\n%{http_code}" \
+    -X POST \
+    "${SERVER_URL}/api/dumps/${DUMP_ID}/restore" 2>&1)
+
+RESTORE_HTTP_CODE=$(echo "$RESTORE_RESPONSE" | tail -n1)
+
+if [ "$RESTORE_HTTP_CODE" -lt 200 ] || [ "$RESTORE_HTTP_CODE" -ge 300 ]; then
+    log_warn "Failed to trigger analysis, but upload was successful"
+fi
+
+log_info "Upload successful!"
+SLUG=$(echo "$CREATE_BODY" | jq -r '.slug // ""')
+if [ -n "$SLUG" ]; then
+    log_info "View in browser: ${SERVER_URL}/d/${SLUG}"
+else
+    log_info "Dump ID: $DUMP_ID"
 fi
 
 # Wait for analysis to complete
