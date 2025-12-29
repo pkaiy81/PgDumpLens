@@ -225,6 +225,7 @@ export default function DumpDetailPage() {
     return () => {
       if (interval) clearInterval(interval);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchDump, fetchDatabases, fetchSchema]);
 
   if (loading) {

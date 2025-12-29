@@ -6,10 +6,7 @@ const nextConfig = {
     // Type checking is done separately in CI via `yarn lint`
     ignoreBuildErrors: false,
   },
-  experimental: {
-    // Required for Yarn PnP compatibility
-    serverComponentsExternalPackages: [],
-  },
+  serverExternalPackages: [],
   async rewrites() {
     return [
       {
