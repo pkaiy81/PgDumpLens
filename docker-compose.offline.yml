@@ -1,13 +1,13 @@
-# PgDumpLens - オフライン/制限環境向け Docker Compose 設定
+# PgDumpLens - Offline/Air-gapped Environment Configuration
+# オフライン/制限環境向け Docker Compose 設定
 #
-# 使い方:
-# 1. GHCR からイメージを取得: docker pull ghcr.io/pkaiy81/pgdumplens/api:latest
-# 2. オフラインの場合: docker save/load でイメージを転送
-# 3. 起動: docker compose -f docker-compose.offline.yml up -d
+# Usage / 使い方:
+# 1. Pull images from GHCR: docker pull ghcr.io/pkaiy81/pgdumplens/api:latest
+# 2. For offline: Transfer images via docker save/load
+# 3. Start: docker compose -f docker-compose.offline.yml up -d
 #
+# See README.md "Offline Deployment" section for details.
 # 詳細は README.md の「制限環境・オフライン環境向けデプロイ」を参照
-
-version: '3.8'
 
 services:
   # ===========================================
@@ -65,6 +65,7 @@ services:
 
   # ===========================================
   # バックグラウンドワーカー (ダンプのリストア・解析処理)
+  # Background Worker (Dump restore & analysis)
   # ===========================================
   worker:
     image: ghcr.io/pkaiy81/pgdumplens/api:latest
@@ -79,6 +80,7 @@ services:
       - SANDBOX_PASSWORD=${SANDBOX_PASSWORD:-secret}
       - UPLOAD_DIR=/dumps
       - POLL_INTERVAL_SECS=5
+      - CLEANUP_INTERVAL_SECS=3600
       - RUST_LOG=info,db_viewer_worker=debug
     volumes:
       - dump-files:/dumps

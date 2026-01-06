@@ -1,12 +1,13 @@
 //! DB Viewer Worker
 //!
 //! Async worker that processes dump restoration and schema analysis jobs.
+//! Also handles TTL-based cleanup of expired dumps.
 
 mod config;
 mod jobs;
 
 use sqlx::postgres::PgPool;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -27,6 +28,10 @@ async fn main() -> anyhow::Result<()> {
     let config = config::WorkerConfig::from_env()?;
 
     info!("Starting DB Viewer Worker");
+    info!(
+        "Job poll interval: {}s, Cleanup interval: {}s",
+        config.poll_interval_secs, config.cleanup_interval_secs
+    );
 
     // Connect to metadata database
     let db_pool = PgPool::connect(&config.database_url).await?;
@@ -42,8 +47,12 @@ async fn main() -> anyhow::Result<()> {
         config.sandbox_password.clone(),
     );
 
+    // Track when cleanup was last run
+    let mut last_cleanup = Instant::now();
+
     // Main worker loop
     loop {
+        // Process pending jobs (restore, analyze)
         match jobs::process_pending_jobs(&db_pool, &adapter, &config).await {
             Ok(processed) => {
                 if processed > 0 {
@@ -53,6 +62,24 @@ async fn main() -> anyhow::Result<()> {
             Err(e) => {
                 error!("Error processing jobs: {}", e);
             }
+        }
+
+        // Run cleanup if enough time has passed
+        if last_cleanup.elapsed() >= Duration::from_secs(config.cleanup_interval_secs) {
+            info!("Running TTL cleanup...");
+            match jobs::cleanup_expired_dumps(&db_pool, &adapter, &config).await {
+                Ok(cleaned) => {
+                    if cleaned > 0 {
+                        info!("Cleaned up {} expired dumps", cleaned);
+                    } else {
+                        info!("No expired dumps to cleanup");
+                    }
+                }
+                Err(e) => {
+                    error!("Error during cleanup: {}", e);
+                }
+            }
+            last_cleanup = Instant::now();
         }
 
         // Sleep before next poll

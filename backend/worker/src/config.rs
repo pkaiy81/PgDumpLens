@@ -19,6 +19,8 @@ pub struct WorkerConfig {
     pub upload_dir: String,
     /// Poll interval in seconds
     pub poll_interval_secs: u64,
+    /// Cleanup interval in seconds (how often to check for expired dumps)
+    pub cleanup_interval_secs: u64,
 }
 
 impl WorkerConfig {
@@ -38,6 +40,10 @@ impl WorkerConfig {
                 .unwrap_or_else(|_| "5".to_string())
                 .parse()
                 .context("Invalid POLL_INTERVAL_SECS")?,
+            cleanup_interval_secs: std::env::var("CLEANUP_INTERVAL_SECS")
+                .unwrap_or_else(|_| "3600".to_string()) // Default: 1 hour
+                .parse()
+                .context("Invalid CLEANUP_INTERVAL_SECS")?,
         })
     }
 

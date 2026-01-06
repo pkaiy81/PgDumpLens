@@ -2,7 +2,8 @@
 
 use chrono::Utc;
 use sqlx::{postgres::PgPool, Row};
-use tracing::{error, info};
+use std::path::Path;
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::config::WorkerConfig;
@@ -198,6 +199,110 @@ async fn mark_error(pool: &PgPool, dump_id: Uuid, error_message: &str) -> anyhow
     .await?;
 
     Ok(())
+}
+
+/// Cleanup expired dumps (TTL enforcement)
+/// This function:
+/// 1. Marks expired dumps as DELETED in the metadata database
+/// 2. Drops the corresponding sandbox databases
+/// 3. Removes the uploaded dump files from disk
+pub async fn cleanup_expired_dumps<A: DbAdapter>(
+    db_pool: &PgPool,
+    adapter: &A,
+    config: &WorkerConfig,
+) -> anyhow::Result<usize> {
+    let now = Utc::now();
+
+    // Find expired dumps that haven't been deleted yet
+    let expired_dumps = sqlx::query(
+        r#"
+        SELECT id, sandbox_db_name, sandbox_databases
+        FROM dumps
+        WHERE expires_at < $1
+          AND status NOT IN ('DELETED', 'ERROR')
+        "#,
+    )
+    .bind(now)
+    .fetch_all(db_pool)
+    .await?;
+
+    if expired_dumps.is_empty() {
+        return Ok(0);
+    }
+
+    info!("Found {} expired dumps to cleanup", expired_dumps.len());
+    let mut cleaned = 0;
+
+    for row in expired_dumps {
+        let dump_id: Uuid = row.get("id");
+        let sandbox_db_name: Option<String> = row.get("sandbox_db_name");
+        let sandbox_databases: Option<Vec<String>> = row.get("sandbox_databases");
+
+        info!("Cleaning up expired dump: {}", dump_id);
+
+        // Collect all databases to drop
+        let mut dbs_to_drop: Vec<String> = Vec::new();
+        if let Some(dbs) = sandbox_databases {
+            dbs_to_drop.extend(dbs);
+        } else if let Some(db) = sandbox_db_name.clone() {
+            dbs_to_drop.push(db);
+        }
+
+        // Drop sandbox databases
+        for db_name in &dbs_to_drop {
+            match adapter.drop_database(db_name).await {
+                Ok(_) => {
+                    info!("Dropped sandbox database: {}", db_name);
+                }
+                Err(e) => {
+                    warn!("Failed to drop sandbox database {}: {}", db_name, e);
+                    // Continue cleanup even if database drop fails
+                }
+            }
+        }
+
+        // Remove dump files from disk
+        let dump_dir = format!("{}/{}", config.upload_dir, dump_id);
+        if Path::new(&dump_dir).exists() {
+            match std::fs::remove_dir_all(&dump_dir) {
+                Ok(_) => {
+                    info!("Removed dump files: {}", dump_dir);
+                }
+                Err(e) => {
+                    warn!("Failed to remove dump files {}: {}", dump_dir, e);
+                    // Continue cleanup even if file removal fails
+                }
+            }
+        }
+
+        // Delete schema cache
+        if let Err(e) = sqlx::query("DELETE FROM dump_schemas WHERE dump_id = $1")
+            .bind(dump_id)
+            .execute(db_pool)
+            .await
+        {
+            warn!("Failed to delete schema cache for dump {}: {}", dump_id, e);
+        }
+
+        // Mark dump as DELETED in metadata
+        sqlx::query(
+            r#"
+            UPDATE dumps
+            SET status = $1, updated_at = $2
+            WHERE id = $3
+            "#,
+        )
+        .bind(DumpStatus::Deleted.as_str())
+        .bind(Utc::now())
+        .bind(dump_id)
+        .execute(db_pool)
+        .await?;
+
+        info!("Successfully cleaned up expired dump: {}", dump_id);
+        cleaned += 1;
+    }
+
+    Ok(cleaned)
 }
 
 #[cfg(test)]

@@ -1,13 +1,19 @@
-version: '3.8'
+# PgDumpLens - Standard Docker Compose Configuration
+# Usage: docker compose up -d
+#
+# This configuration builds images locally and is suitable for development.
+# For production, use docker-compose.prod.yml with proper secrets.
 
 services:
+  # ===========================================
   # Metadata Database - stores dump info, schema cache, job queue
+  # ===========================================
   metadata-db:
     image: postgres:16-alpine
     container_name: pgdumplens-metadata
     environment:
       POSTGRES_USER: dbviewer
-      POSTGRES_PASSWORD: dbviewer_dev
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-dbviewer_dev}
       POSTGRES_DB: dbviewer_metadata
     ports:
       - "5432:5432"
@@ -19,14 +25,18 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - pgdumplens-net
 
+  # ===========================================
   # Sandbox Database - restored dump databases are created here
+  # ===========================================
   sandbox-db:
     image: postgres:16-alpine
     container_name: pgdumplens-sandbox
     environment:
       POSTGRES_USER: sandbox
-      POSTGRES_PASSWORD: sandbox_dev
+      POSTGRES_PASSWORD: ${SANDBOX_PASSWORD:-sandbox_dev}
       POSTGRES_DB: sandbox_template
     ports:
       - "5433:5432"
@@ -38,8 +48,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - pgdumplens-net
 
-  # API Server
+  # ===========================================
+  # API Server (Rust/Axum)
+  # ===========================================
   api:
     build:
       context: ./backend
@@ -47,15 +61,15 @@ services:
     container_name: pgdumplens-api
     command: ["/app/api-server"]
     environment:
-      DATABASE_URL: postgres://dbviewer:dbviewer_dev@metadata-db:5432/dbviewer_metadata
+      DATABASE_URL: postgres://dbviewer:${DB_PASSWORD:-dbviewer_dev}@metadata-db:5432/dbviewer_metadata
       SANDBOX_HOST: sandbox-db
       SANDBOX_PORT: "5432"
       SANDBOX_USER: sandbox
-      SANDBOX_PASSWORD: sandbox_dev
+      SANDBOX_PASSWORD: ${SANDBOX_PASSWORD:-sandbox_dev}
       HOST: "0.0.0.0"
       PORT: "8080"
       UPLOAD_DIR: /data/uploads
-      RUST_LOG: info,db_viewer=debug
+      RUST_LOG: ${RUST_LOG:-info,db_viewer=debug}
     ports:
       - "8080:8080"
     volumes:
@@ -65,8 +79,12 @@ services:
         condition: service_healthy
       sandbox-db:
         condition: service_healthy
+    networks:
+      - pgdumplens-net
 
+  # ===========================================
   # Worker - processes restore and analysis jobs
+  # ===========================================
   worker:
     build:
       context: ./backend
@@ -74,14 +92,15 @@ services:
     container_name: pgdumplens-worker
     command: ["/app/worker"]
     environment:
-      DATABASE_URL: postgres://dbviewer:dbviewer_dev@metadata-db:5432/dbviewer_metadata
+      DATABASE_URL: postgres://dbviewer:${DB_PASSWORD:-dbviewer_dev}@metadata-db:5432/dbviewer_metadata
       SANDBOX_HOST: sandbox-db
       SANDBOX_PORT: "5432"
       SANDBOX_USER: sandbox
-      SANDBOX_PASSWORD: sandbox_dev
+      SANDBOX_PASSWORD: ${SANDBOX_PASSWORD:-sandbox_dev}
       UPLOAD_DIR: /data/uploads
       POLL_INTERVAL_SECS: "5"
-      RUST_LOG: info,db_viewer_worker=debug
+      CLEANUP_INTERVAL_SECS: "3600"
+      RUST_LOG: ${RUST_LOG:-info,db_viewer_worker=debug}
     volumes:
       - uploads-data:/data/uploads
     depends_on:
@@ -89,8 +108,12 @@ services:
         condition: service_healthy
       sandbox-db:
         condition: service_healthy
+    networks:
+      - pgdumplens-net
 
-  # Frontend
+  # ===========================================
+  # Frontend (Next.js)
+  # ===========================================
   frontend:
     build:
       context: ./frontend
@@ -102,8 +125,20 @@ services:
       - "3000:3000"
     depends_on:
       - api
+    networks:
+      - pgdumplens-net
 
+# ===========================================
+# Volumes
+# ===========================================
 volumes:
   metadata-data:
   sandbox-data:
   uploads-data:
+
+# ===========================================
+# Networks
+# ===========================================
+networks:
+  pgdumplens-net:
+    driver: bridge

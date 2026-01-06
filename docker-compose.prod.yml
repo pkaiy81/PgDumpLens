@@ -1,7 +1,19 @@
-version: '3.8'
+# PgDumpLens - Production Configuration
+# Usage: docker compose -f docker-compose.prod.yml up -d
+#
+# Prerequisites:
+# 1. Copy .env.example to .env and set secure passwords
+# 2. Configure SSL certificates in deploy/nginx/ssl/ (optional)
+#
+# Includes:
+# - Nginx reverse proxy with optional SSL
+# - Health checks for all services
+# - Automatic container restart
 
 services:
-  # API Server
+  # ===========================================
+  # API Server (Rust/Axum)
+  # ===========================================
   api:
     build:
       context: ./backend
@@ -49,8 +61,9 @@ services:
       - SANDBOX_PORT=5432
       - SANDBOX_USER=sandbox
       - SANDBOX_PASSWORD=${SANDBOX_PASSWORD}
-      - DUMP_STORAGE_PATH=/dumps
-      - WORKER_POLL_INTERVAL_SECS=5
+      - UPLOAD_DIR=/dumps
+      - POLL_INTERVAL_SECS=5
+      - CLEANUP_INTERVAL_SECS=3600
     volumes:
       - dump-files:/dumps
     depends_on:

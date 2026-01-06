@@ -1,10 +1,15 @@
-version: '3.8'
-
-# Development configuration with hot reload support
+# PgDumpLens - Development Configuration with Hot Reload
 # Usage: docker compose -f docker-compose.dev.yml up
+#
+# Features:
+# - Backend: cargo-watch for automatic recompilation
+# - Frontend: Next.js hot module replacement
+# - Source code mounted for live editing
 
 services:
+  # ===========================================
   # Metadata Database - stores dump info, schema cache, job queue
+  # ===========================================
   metadata-db:
     image: postgres:16-alpine
     container_name: pgdumplens-metadata
@@ -22,8 +27,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - pgdumplens-net
 
+  # ===========================================
   # Sandbox Database - restored dump databases are created here
+  # ===========================================
   sandbox-db:
     image: postgres:16-alpine
     container_name: pgdumplens-sandbox
@@ -41,8 +50,12 @@ services:
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - pgdumplens-net
 
+  # ===========================================
   # API Server - Development with cargo-watch for hot reload
+  # ===========================================
   api:
     build:
       context: ./backend
@@ -57,7 +70,7 @@ services:
       HOST: "0.0.0.0"
       PORT: "8080"
       UPLOAD_DIR: /data/uploads
-      RUST_LOG: info,db_viewer=debug
+      RUST_LOG: debug,db_viewer=debug
       CARGO_TARGET_DIR: /app/target
     ports:
       - "8080:8080"
@@ -72,8 +85,12 @@ services:
       sandbox-db:
         condition: service_healthy
     command: ["cargo", "watch", "-x", "run --bin api-server"]
+    networks:
+      - pgdumplens-net
 
+  # ===========================================
   # Worker - Development with cargo-watch for hot reload
+  # ===========================================
   worker:
     build:
       context: ./backend
@@ -87,7 +104,8 @@ services:
       SANDBOX_PASSWORD: sandbox_dev
       UPLOAD_DIR: /data/uploads
       POLL_INTERVAL_SECS: "5"
-      RUST_LOG: info,db_viewer_worker=debug
+      CLEANUP_INTERVAL_SECS: "300"
+      RUST_LOG: debug,db_viewer_worker=debug
       CARGO_TARGET_DIR: /app/target
     volumes:
       - ./backend:/app/src
@@ -100,8 +118,12 @@ services:
       sandbox-db:
         condition: service_healthy
     command: ["cargo", "watch", "-x", "run --bin worker"]
+    networks:
+      - pgdumplens-net
 
+  # ===========================================
   # Frontend - Development with Next.js hot reload
+  # ===========================================
   frontend:
     build:
       context: ./frontend
@@ -118,7 +140,12 @@ services:
     depends_on:
       - api
     command: ["yarn", "dev"]
+    networks:
+      - pgdumplens-net
 
+# ===========================================
+# Volumes
+# ===========================================
 volumes:
   metadata-data:
   sandbox-data:
@@ -126,3 +153,10 @@ volumes:
   cargo-cache:
   target-cache:
   target-cache-worker:
+
+# ===========================================
+# Networks
+# ===========================================
+networks:
+  pgdumplens-net:
+    driver: bridge
