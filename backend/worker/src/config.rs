@@ -77,6 +77,7 @@ mod tests {
             sandbox_password: None,
             upload_dir: "/data".to_string(),
             poll_interval_secs: 5,
+            cleanup_interval_secs: 3600,
         };
 
         assert_eq!(
@@ -95,6 +96,7 @@ mod tests {
             sandbox_password: Some("secret".to_string()),
             upload_dir: "/data".to_string(),
             poll_interval_secs: 5,
+            cleanup_interval_secs: 3600,
         };
 
         assert_eq!(
