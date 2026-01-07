@@ -106,3 +106,59 @@ export interface DatabaseListResponse {
   databases: string[];
   primary: string | null;
 }
+
+// ==================== Diff Types ====================
+
+export type ChangeType = 'added' | 'removed' | 'modified';
+
+export interface DiffSummary {
+  tables_added: number;
+  tables_removed: number;
+  tables_modified: number;
+  columns_added: number;
+  columns_removed: number;
+  columns_modified: number;
+  fk_added: number;
+  fk_removed: number;
+  row_count_change: number;
+}
+
+export interface ColumnDiffInfo {
+  data_type: string;
+  is_nullable: boolean;
+  is_primary_key: boolean;
+  default_value: string | null;
+}
+
+export interface ColumnDiff {
+  column_name: string;
+  change_type: ChangeType;
+  base_info: ColumnDiffInfo | null;
+  compare_info: ColumnDiffInfo | null;
+}
+
+export interface TableDiff {
+  schema_name: string;
+  table_name: string;
+  change_type: ChangeType;
+  base_row_count: number | null;
+  compare_row_count: number | null;
+  column_diffs: ColumnDiff[];
+}
+
+export interface ForeignKeyDiff {
+  constraint_name: string;
+  change_type: ChangeType;
+  source_table: string;
+  target_table: string;
+  fk_info: ForeignKey | null;
+}
+
+export interface SchemaDiffResponse {
+  base_dump_id: string;
+  compare_dump_id: string;
+  database_name: string;
+  summary: DiffSummary;
+  table_diffs: TableDiff[];
+  fk_diffs: ForeignKeyDiff[];
+}

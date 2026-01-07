@@ -1,5 +1,6 @@
 //! API handlers
 
+pub mod diff;
 pub mod dumps;
 pub mod relation;
 pub mod risk;

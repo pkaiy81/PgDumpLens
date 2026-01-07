@@ -87,3 +87,8 @@ uploads/
 # ====================
 /deploy/k8s/secrets/
 *.secret.yaml
+
+# ====================
+# Internal Documentation
+# ====================
+/docs/internal/

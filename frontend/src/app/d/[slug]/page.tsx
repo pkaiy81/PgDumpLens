@@ -5,6 +5,8 @@ import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { SchemaExplorer } from '@/components/SchemaExplorer';
 import SearchResults from '@/components/SearchResults';
+import DiffViewer from '@/components/DiffViewer';
+import { SchemaDiffResponse } from '@/types';
 
 interface Dump {
   id: string;
@@ -87,7 +89,15 @@ export default function DumpDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [activeTab, setActiveTab] = useState<'schema' | 'search'>('schema');
+  const [activeTab, setActiveTab] = useState<'schema' | 'search' | 'compare'>('schema');
+  
+  // Diff comparison state
+  const [compareDumpId, setCompareDumpId] = useState<string | null>(null);
+  const [diffResult, setDiffResult] = useState<SchemaDiffResponse | null>(null);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState<string | null>(null);
+  const [compareFile, setCompareFile] = useState<File | null>(null);
+  const [compareUploading, setCompareUploading] = useState(false);
 
   const fetchDump = useCallback(async () => {
     try {
@@ -146,6 +156,97 @@ export default function DumpDetailPage() {
       fetchSchema(dump.id, newDb);
     }
   }, [dump, selectedDb, fetchSchema]);
+
+  // Handle compare dump file upload
+  const handleCompareFileUpload = async (file: File) => {
+    if (!dump) return;
+    
+    setCompareUploading(true);
+    setDiffError(null);
+    
+    try {
+      // Create a new dump for comparison
+      const createRes = await fetch('/api/dumps', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: `Compare: ${file.name}` }),
+      });
+      
+      if (!createRes.ok) throw new Error('Failed to create comparison dump');
+      const compareDump = await createRes.json();
+      
+      // Upload the file using FormData (same as FileUpload component)
+      const formData = new FormData();
+      formData.append('file', file);
+      
+      const uploadRes = await fetch(compareDump.upload_url || `/api/dumps/${compareDump.id}/upload`, {
+        method: 'PUT',
+        body: formData,
+      });
+      
+      if (!uploadRes.ok) throw new Error('Failed to upload comparison dump');
+      
+      // Trigger restore
+      const restoreRes = await fetch(`/api/dumps/${compareDump.id}/restore`, {
+        method: 'POST',
+      });
+      
+      if (!restoreRes.ok) throw new Error('Failed to start restore');
+      
+      // Wait for restore to complete (poll status)
+      let status = 'RESTORING';
+      let attempts = 0;
+      const maxAttempts = 60; // 2 minutes max
+      
+      while (status !== 'READY' && status !== 'ERROR' && attempts < maxAttempts) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        const statusRes = await fetch(`/api/dumps/${compareDump.id}`);
+        if (!statusRes.ok) throw new Error('Failed to check comparison dump status');
+        const statusData = await statusRes.json();
+        status = statusData.status;
+        attempts++;
+        
+        if (status === 'ERROR') {
+          throw new Error(statusData.error_message || 'Comparison dump restore failed');
+        }
+      }
+      
+      if (status !== 'READY') {
+        throw new Error('Comparison dump processing timed out');
+      }
+      
+      setCompareDumpId(compareDump.id);
+      
+      // Fetch the diff
+      const dbParam = selectedDb ? `?database=${encodeURIComponent(selectedDb)}` : '';
+      const diffRes = await fetch(`/api/dumps/${dump.id}/compare/${compareDump.id}${dbParam}`);
+      
+      if (!diffRes.ok) throw new Error('Failed to compute diff');
+      const diffData: SchemaDiffResponse = await diffRes.json();
+      setDiffResult(diffData);
+      
+    } catch (err) {
+      setDiffError(err instanceof Error ? err.message : 'Comparison failed');
+    } finally {
+      setCompareUploading(false);
+      setCompareFile(null);
+    }
+  };
+
+  // Clear comparison
+  const clearComparison = async () => {
+    // Optionally delete the comparison dump
+    if (compareDumpId) {
+      try {
+        await fetch(`/api/dumps/${compareDumpId}`, { method: 'DELETE' });
+      } catch {
+        // Ignore errors
+      }
+    }
+    setCompareDumpId(null);
+    setDiffResult(null);
+    setDiffError(null);
+  };
 
   // Handle dump deletion
   const handleDelete = async () => {
@@ -417,6 +518,16 @@ export default function DumpDetailPage() {
                 >
                   🔍 Full-Text Search
                 </button>
+                <button
+                  onClick={() => setActiveTab('compare')}
+                  className={`py-4 px-2 font-medium text-sm border-b-2 transition-colors ${
+                    activeTab === 'compare'
+                      ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                      : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'
+                  }`}
+                >
+                  🔄 Compare Dumps
+                </button>
               </nav>
             </div>
 
@@ -428,11 +539,93 @@ export default function DumpDetailPage() {
                   fullMermaidER={schema.mermaid_er}
                   selectedDatabase={selectedDb || undefined}
                 />
-              ) : (
+              ) : activeTab === 'search' ? (
                 <SearchResults 
                   dumpId={dump.id}
                   databases={databases?.databases}
                 />
+              ) : (
+                <div className="space-y-6">
+                  {diffResult ? (
+                    <>
+                      <div className="flex items-center justify-between">
+                        <div className="text-sm text-slate-600 dark:text-slate-400">
+                          Comparing with uploaded dump
+                        </div>
+                        <button
+                          onClick={clearComparison}
+                          className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors"
+                        >
+                          ✕ Clear Comparison
+                        </button>
+                      </div>
+                      <DiffViewer diff={diffResult} />
+                    </>
+                  ) : (
+                    <div className="text-center py-12">
+                      <div className="max-w-md mx-auto">
+                        <h3 className="text-lg font-semibold text-slate-800 dark:text-slate-200 mb-2">
+                          Compare with Another Dump
+                        </h3>
+                        <p className="text-sm text-slate-600 dark:text-slate-400 mb-6">
+                          Upload another PostgreSQL dump to see schema differences. 
+                          This is useful for comparing database changes before and after operations.
+                        </p>
+                        
+                        {diffError && (
+                          <div className="mb-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-red-600 dark:text-red-400 text-sm">
+                            {diffError}
+                          </div>
+                        )}
+                        
+                        <div className="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-xl p-8 hover:border-indigo-400 dark:hover:border-indigo-500 transition-colors">
+                          {compareUploading ? (
+                            <div className="flex flex-col items-center">
+                              <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-500 mb-4"></div>
+                              <p className="text-slate-600 dark:text-slate-400">
+                                Processing comparison dump...
+                              </p>
+                              <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
+                                This may take a few minutes for large dumps
+                              </p>
+                            </div>
+                          ) : (
+                            <>
+                              <input
+                                type="file"
+                                accept=".sql,.dump,.backup,.gz,.bz2,.xz"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (file) handleCompareFileUpload(file);
+                                }}
+                                className="hidden"
+                                id="compare-file-input"
+                              />
+                              <label
+                                htmlFor="compare-file-input"
+                                className="cursor-pointer flex flex-col items-center"
+                              >
+                                <svg className="w-12 h-12 text-slate-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                                </svg>
+                                <span className="text-sm font-medium text-indigo-600 dark:text-indigo-400">
+                                  Upload dump for comparison
+                                </span>
+                                <span className="text-xs text-slate-400 mt-1">
+                                  .sql, .dump, .backup, .gz, .bz2, .xz
+                                </span>
+                              </label>
+                            </>
+                          )}
+                        </div>
+                        
+                        <p className="text-xs text-slate-400 dark:text-slate-500 mt-4">
+                          💡 Tip: Use pg_dump to create dump files from your PostgreSQL databases
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </div>
