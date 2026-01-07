@@ -13,6 +13,19 @@ use uuid::Uuid;
 use crate::error::ApiError;
 use crate::state::AppState;
 
+/// Type alias for foreign key query result to reduce type complexity
+type FkQueryRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+);
+
 /// Query parameters for diff comparison
 #[derive(Debug, Deserialize)]
 pub struct DiffQuery {
@@ -247,17 +260,7 @@ async fn load_schema_graph(
     }
 
     // Get foreign keys
-    let fk_rows: Vec<(
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-        String,
-    )> = sqlx::query_as(
+    let fk_rows: Vec<FkQueryRow> = sqlx::query_as(
         r#"
         SELECT 
             tc.constraint_name::text,
