@@ -207,7 +207,59 @@ sequenceDiagram
 
 ---
 
-## 7. Risk Assessment Model
+## 7. Dump Comparison & Data Diff Flow
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Frontend
+    participant API
+    participant MetaDB as Metadata DB
+    participant SandboxDB as Sandbox DB
+
+    User->>Frontend: Upload comparison dump
+    Frontend->>API: POST /api/dumps (is_private: true)
+    API->>MetaDB: Insert dump record
+    API-->>Frontend: {id, slug}
+    
+    Frontend->>API: PUT /api/dumps/{id}/upload
+    API->>SandboxDB: Restore dump
+    API->>MetaDB: Update status=READY
+    API-->>Frontend: 200 OK
+    
+    User->>Frontend: View schema diff
+    Frontend->>API: GET /api/dumps/{base}/compare/{compare}
+    API->>SandboxDB: Query both schemas
+    API->>API: Compare schemas
+    API->>SandboxDB: Calculate MD5 checksums for each table
+    API-->>Frontend: {schemaDiff, dataChanges}
+    
+    User->>Frontend: Click "View Data Diff"
+    Frontend->>API: GET /api/dumps/{base}/compare/{compare}/data-diff
+    API->>SandboxDB: Query table data from both dumps
+    API->>API: Compute row-level diff
+    API-->>Frontend: {added, removed, modified rows}
+    
+    Frontend->>Frontend: Display diff with highlights
+```
+
+### Data Change Detection
+
+データ変更は以下の方法で自動検出されます：
+
+1. **MD5チェックサム計算**: 各テーブルの先頭10,000行に対してMD5チェックサムを計算
+2. **比較**: ベースダンプと比較ダンプのチェックサムを比較
+3. **変更フラグ**: チェックサムが異なる場合、`has_data_change: true` をセット
+
+```sql
+-- チェックサム計算クエリ
+SELECT md5(string_agg(md5(t::text), '' ORDER BY t::text)) as checksum
+FROM (SELECT * FROM "schema"."table" ORDER BY 1 LIMIT 10000) t
+```
+
+---
+
+## 8. Risk Assessment Model
 
 ```mermaid
 flowchart TD
@@ -241,7 +293,7 @@ flowchart TD
 
 ---
 
-## 8. Docker Compose Configurations
+## 9. Docker Compose Configurations
 
 | ファイル                  | 用途               | 特徴                               |
 | ------------------------- | ------------------ | ---------------------------------- |
@@ -251,7 +303,7 @@ flowchart TD
 
 ---
 
-## 9. Kubernetes Deployment Architecture
+## 10. Kubernetes Deployment Architecture
 
 ```mermaid
 graph TB
@@ -304,7 +356,7 @@ graph TB
 
 ---
 
-## 10. ER Diagram Generation Flow
+## 11. ER Diagram Generation Flow
 
 ```mermaid
 flowchart LR
@@ -327,7 +379,7 @@ flowchart LR
 
 ---
 
-## 11. Data Flow Summary
+## 12. Data Flow Summary
 
 | Flow          | Source           | Destination          | Data                  |
 | ------------- | ---------------- | -------------------- | --------------------- |
@@ -336,11 +388,13 @@ flowchart LR
 | Introspection | Sandbox DB       | Metadata DB          | Schema graph          |
 | View          | Metadata DB      | API → Browser        | ER diagram, tables    |
 | Query         | Sandbox DB       | API → Browser        | Row data              |
+| Compare       | Sandbox DB x2    | API → Browser        | Schema diff           |
+| Data Diff     | Sandbox DB x2    | API → Browser        | Row-level diff        |
 | Cleanup       | CronJob          | Sandbox DB + Storage | Drop DB, delete files |
 
 ---
 
-## 12. Technology Stack
+## 13. Technology Stack
 
 ```mermaid
 mindmap

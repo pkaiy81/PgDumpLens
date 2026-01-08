@@ -144,6 +144,7 @@ export interface TableDiff {
   base_row_count: number | null;
   compare_row_count: number | null;
   column_diffs: ColumnDiff[];
+  has_data_change?: boolean;
 }
 
 export interface ForeignKeyDiff {
@@ -161,4 +162,27 @@ export interface SchemaDiffResponse {
   summary: DiffSummary;
   table_diffs: TableDiff[];
   fk_diffs: ForeignKeyDiff[];
+}
+
+// ==================== Data Diff Types ====================
+
+export interface RowDiff {
+  pk: unknown;
+  change_type: 'added' | 'removed' | 'modified';
+  base_values: Record<string, unknown> | null;
+  compare_values: Record<string, unknown> | null;
+  changed_columns: string[];
+}
+
+export interface TableDataDiffResponse {
+  base_dump_id: string;
+  compare_dump_id: string;
+  schema_name: string;
+  table_name: string;
+  primary_key_columns: string[];
+  total_added: number;
+  total_removed: number;
+  total_modified: number;
+  rows: RowDiff[];
+  truncated: boolean;
 }

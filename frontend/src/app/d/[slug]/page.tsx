@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { SchemaExplorer } from '@/components/SchemaExplorer';
 import SearchResults from '@/components/SearchResults';
 import DiffViewer from '@/components/DiffViewer';
-import { SchemaDiffResponse } from '@/types';
+import { SchemaDiffResponse, TableDataDiffResponse } from '@/types';
 
 interface Dump {
   id: string;
@@ -149,13 +149,36 @@ export default function DumpDetailPage() {
     }
   }, []);
 
+  // Fetch diff for the selected database
+  const fetchDiff = useCallback(async (baseDumpId: string, compareDumpId: string, database?: string) => {
+    try {
+      setDiffLoading(true);
+      const dbParam = database ? `?database=${encodeURIComponent(database)}` : '';
+      const res = await fetch(`/api/dumps/${baseDumpId}/compare/${compareDumpId}${dbParam}`);
+      if (!res.ok) {
+        throw new Error('Failed to fetch diff');
+      }
+      const data: SchemaDiffResponse = await res.json();
+      setDiffResult(data);
+    } catch (err) {
+      console.error('Diff fetch error:', err);
+      setDiffError(err instanceof Error ? err.message : 'Failed to fetch diff');
+    } finally {
+      setDiffLoading(false);
+    }
+  }, []);
+
   // Handle database selection change
   const handleDatabaseChange = useCallback((newDb: string) => {
     if (dump && newDb !== selectedDb) {
       setSelectedDb(newDb);
       fetchSchema(dump.id, newDb);
+      // Re-fetch diff if we have a comparison
+      if (compareDumpId) {
+        fetchDiff(dump.id, compareDumpId, newDb);
+      }
     }
-  }, [dump, selectedDb, fetchSchema]);
+  }, [dump, selectedDb, fetchSchema, compareDumpId, fetchDiff]);
 
   // Handle compare dump file upload
   const handleCompareFileUpload = async (file: File) => {
@@ -165,11 +188,11 @@ export default function DumpDetailPage() {
     setDiffError(null);
     
     try {
-      // Create a new dump for comparison
+      // Create a new dump for comparison (marked as private so it doesn't show in recents)
       const createRes = await fetch('/api/dumps', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: `Compare: ${file.name}` }),
+        body: JSON.stringify({ name: `Compare: ${file.name}`, is_private: true }),
       });
       
       if (!createRes.ok) throw new Error('Failed to create comparison dump');
@@ -546,6 +569,27 @@ export default function DumpDetailPage() {
                 />
               ) : (
                 <div className="space-y-6">
+                  {/* Database selector for comparison (only show if multiple databases) */}
+                  {databases && databases.databases.length > 1 && (
+                    <div className="flex items-center gap-4 p-4 bg-slate-50 dark:bg-slate-900 rounded-lg">
+                      <label htmlFor="compare-db-select" className="text-sm font-medium text-slate-700 dark:text-slate-300">
+                        Compare Database:
+                      </label>
+                      <select
+                        id="compare-db-select"
+                        value={selectedDb || ''}
+                        onChange={(e) => handleDatabaseChange(e.target.value)}
+                        className="flex-1 max-w-md px-3 py-2 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                      >
+                        {databases.databases.map((db) => (
+                          <option key={db} value={db}>
+                            {db} {db === databases.primary ? '(default)' : ''}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                  
                   {diffResult ? (
                     <>
                       <div className="flex items-center justify-between">
@@ -559,7 +603,36 @@ export default function DumpDetailPage() {
                           ✕ Clear Comparison
                         </button>
                       </div>
-                      <DiffViewer diff={diffResult} />
+                      <DiffViewer 
+                        diff={diffResult}
+                        allTables={schema?.schema_graph?.tables?.map(t => ({
+                          schema_name: t.schema_name,
+                          table_name: t.table_name,
+                          estimated_row_count: t.estimated_row_count,
+                        }))}
+                        onViewTableData={async (schemaName, table) => {
+                          if (!dump || !compareDumpId) return null;
+                          try {
+                            const url = new URL(
+                              `/api/dumps/${dump.id}/compare/${compareDumpId}/table/${encodeURIComponent(schemaName)}/${encodeURIComponent(table)}`,
+                              window.location.origin
+                            );
+                            if (selectedDb) {
+                              url.searchParams.set('database', selectedDb);
+                            }
+                            const res = await fetch(url.toString());
+                            if (!res.ok) {
+                              const error = await res.text();
+                              console.error('Data diff error:', error);
+                              return null;
+                            }
+                            return await res.json() as TableDataDiffResponse;
+                          } catch (err) {
+                            console.error('Data diff fetch error:', err);
+                            return null;
+                          }
+                        }}
+                      />
                     </>
                   ) : (
                     <div className="text-center py-12">

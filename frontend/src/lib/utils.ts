@@ -45,15 +45,15 @@ export function formatBytes(bytes: number): string {
 export function getRiskColor(level: string): string {
   switch (level) {
     case 'low':
-      return 'text-green-700 bg-green-50 dark:text-green-300 dark:bg-green-950 border-2 border-green-500';
+      return 'text-green-800 bg-green-100 dark:text-green-100 dark:bg-green-800 border-2 border-green-600 dark:border-green-400';
     case 'medium':
-      return 'text-yellow-700 bg-yellow-50 dark:text-yellow-300 dark:bg-yellow-950 border-2 border-yellow-500';
+      return 'text-yellow-800 bg-yellow-100 dark:text-yellow-100 dark:bg-yellow-700 border-2 border-yellow-600 dark:border-yellow-400';
     case 'high':
-      return 'text-orange-700 bg-orange-50 dark:text-orange-300 dark:bg-orange-950 border-2 border-orange-500';
+      return 'text-orange-800 bg-orange-100 dark:text-orange-100 dark:bg-orange-700 border-2 border-orange-600 dark:border-orange-400';
     case 'critical':
-      return 'text-red-700 bg-red-50 dark:text-red-300 dark:bg-red-950 border-2 border-red-500';
+      return 'text-red-800 bg-red-100 dark:text-red-100 dark:bg-red-800 border-2 border-red-600 dark:border-red-400';
     default:
-      return 'text-slate-700 bg-slate-50 dark:text-slate-300 dark:bg-slate-900 border-2 border-slate-400';
+      return 'text-slate-800 bg-slate-100 dark:text-slate-100 dark:bg-slate-700 border-2 border-slate-500 dark:border-slate-400';
   }
 }
 

@@ -14,6 +14,36 @@ use crate::state::AppState;
 use db_viewer_core::domain::SchemaGraph;
 use db_viewer_core::schema::generate_mermaid_er;
 
+/// Extract the original database name from a sandbox database name
+/// 
+/// Prefixed format: sandbox_{uuid_with_underscores}_{original_db_name} -> original_db_name
+/// Non-prefixed format: original_db_name -> original_db_name
+fn extract_original_db_name(sandbox_name: &str) -> String {
+    if sandbox_name.starts_with("sandbox_") {
+        // Format: sandbox_{uuid_with_underscores}_{db_name}
+        // UUID format: xxxxxxxx_xxxx_xxxx_xxxx_xxxxxxxxxxxx (36 chars with underscores)
+        // Total prefix: "sandbox_" (8) + uuid (36) + "_" (1) = 45 chars
+        if sandbox_name.len() > 45 && sandbox_name.chars().nth(44) == Some('_') {
+            return sandbox_name[45..].to_string();
+        }
+    }
+    sandbox_name.to_string()
+}
+
+/// Find sandbox database name for a given user-friendly database name
+/// 
+/// Searches through sandbox_databases to find one that matches the original name.
+fn find_sandbox_db_name(sandbox_databases: &Option<Vec<String>>, user_db_name: &str) -> Option<String> {
+    if let Some(dbs) = sandbox_databases {
+        let suffix = format!("_{}", user_db_name);
+        dbs.iter()
+            .find(|db| db.ends_with(&suffix) || *db == user_db_name)
+            .cloned()
+    } else {
+        None
+    }
+}
+
 /// Get schema response
 #[derive(Debug, Serialize)]
 pub struct SchemaResponse {
@@ -34,63 +64,57 @@ pub async fn get_schema(
     Path(id): Path<Uuid>,
     Query(query): Query<SchemaQuery>,
 ) -> ApiResult<Json<SchemaResponse>> {
+    // First, fetch dump info
+    let dump_row = sqlx::query(
+        r#"
+        SELECT sandbox_databases, sandbox_db_name
+        FROM dumps
+        WHERE id = $1 AND status = 'READY'
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("Dump {} not found or not ready", id)))?;
+
+    let available_dbs: Option<Vec<String>> = dump_row.get("sandbox_databases");
+    let primary_db: Option<String> = dump_row.get("sandbox_db_name");
+
     // Determine which database to use
-    let requested_db = if let Some(ref db) = query.database {
-        // Verify this database is available for this dump
-        let dump_row = sqlx::query(
-            r#"
-            SELECT sandbox_databases, sandbox_db_name
-            FROM dumps
-            WHERE id = $1 AND status = 'READY'
-            "#,
-        )
-        .bind(id)
-        .fetch_optional(&state.db_pool)
-        .await?;
+    let requested_db = if let Some(ref user_db) = query.database {
+        // User requested a specific database by user-friendly name
+        // Find the corresponding sandbox database name
+        let sandbox_db = find_sandbox_db_name(&available_dbs, user_db)
+            .or_else(|| {
+                // Check if user_db matches primary_db directly or as extracted name
+                primary_db.as_ref().and_then(|pdb| {
+                    if pdb == user_db || extract_original_db_name(pdb) == *user_db {
+                        Some(pdb.clone())
+                    } else {
+                        None
+                    }
+                })
+            });
 
-        let row = dump_row
-            .ok_or_else(|| ApiError::NotFound(format!("Dump {} not found or not ready", id)))?;
-
-        let available_dbs: Option<Vec<String>> = row.get("sandbox_databases");
-        let primary_db: Option<String> = row.get("sandbox_db_name");
-
-        // Check if requested database is available
-        let available = available_dbs
-            .as_ref()
-            .map(|dbs| dbs.contains(db))
-            .unwrap_or(false)
-            || primary_db.as_ref() == Some(db);
-
-        if !available {
-            return Err(ApiError::BadRequest(format!(
-                "Database '{}' is not available for this dump. Available: {:?}",
-                db,
-                available_dbs.unwrap_or_else(|| primary_db.map_or(vec![], |p| vec![p]))
-            )));
+        match sandbox_db {
+            Some(db) => db,
+            None => {
+                // Database not found - show user-friendly names in error
+                let friendly_names: Vec<String> = available_dbs
+                    .as_ref()
+                    .map(|dbs| dbs.iter().map(|d| extract_original_db_name(d)).collect())
+                    .unwrap_or_else(|| primary_db.iter().map(|p| extract_original_db_name(p)).collect());
+                return Err(ApiError::BadRequest(format!(
+                    "Database '{}' is not available for this dump. Available: {:?}",
+                    user_db, friendly_names
+                )));
+            }
         }
-
-        db.clone()
     } else {
-        // Get primary database name or first available database
-        let row = sqlx::query(
-            r#"
-            SELECT sandbox_db_name, sandbox_databases
-            FROM dumps
-            WHERE id = $1
-            "#,
-        )
-        .bind(id)
-        .fetch_optional(&state.db_pool)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Dump {} not found", id)))?;
-
-        let sandbox_db_name: Option<String> = row.get("sandbox_db_name");
-        let sandbox_databases: Option<Vec<String>> = row.get("sandbox_databases");
-
-        // Prefer sandbox_databases[0] for multi-database dumps, fall back to sandbox_db_name
-        sandbox_databases
+        // No database specified - use the first available database
+        available_dbs
             .and_then(|dbs| dbs.first().cloned())
-            .or(sandbox_db_name)
+            .or(primary_db)
             .ok_or_else(|| ApiError::NotFound(format!("No database found for dump {}", id)))?
     };
 
@@ -171,38 +195,44 @@ pub async fn get_table_data(
             .fetch_optional(&state.db_pool)
             .await?;
 
-    let (sandbox_db, available_dbs): (String, Option<Vec<String>>) = match dump_row {
+    let sandbox_db: String = match dump_row {
         Some(row) => {
             let primary_db: Option<String> = row.get("sandbox_db_name");
             let available_dbs: Option<Vec<String>> = row.get("sandbox_databases");
 
             // Use query parameter if provided, otherwise default to primary
-            let db = if let Some(ref requested_db) = query.database {
-                // Verify the requested database is available
-                let is_available = available_dbs
-                    .as_ref()
-                    .map(|dbs| dbs.contains(requested_db))
-                    .unwrap_or(false)
-                    || primary_db.as_ref() == Some(requested_db);
-
-                if !is_available {
-                    return Err(ApiError::BadRequest(format!(
-                        "Database '{}' is not available for this dump",
-                        requested_db
-                    )));
-                }
-                requested_db.clone()
+            if let Some(ref user_db) = query.database {
+                // Find the sandbox database name for the user-friendly name
+                find_sandbox_db_name(&available_dbs, user_db)
+                    .or_else(|| {
+                        primary_db.as_ref().and_then(|pdb| {
+                            if pdb == user_db || extract_original_db_name(pdb) == *user_db {
+                                Some(pdb.clone())
+                            } else {
+                                None
+                            }
+                        })
+                    })
+                    .ok_or_else(|| {
+                        let friendly_names: Vec<String> = available_dbs
+                            .as_ref()
+                            .map(|dbs| dbs.iter().map(|d| extract_original_db_name(d)).collect())
+                            .unwrap_or_else(|| primary_db.iter().map(|p| extract_original_db_name(p)).collect());
+                        ApiError::BadRequest(format!(
+                            "Database '{}' is not available for this dump. Available: {:?}",
+                            user_db, friendly_names
+                        ))
+                    })?
             } else {
-                primary_db
+                // No database specified - use first available or primary
+                available_dbs
+                    .and_then(|dbs| dbs.first().cloned())
+                    .or(primary_db)
                     .ok_or_else(|| ApiError::BadRequest("Dump not restored yet".to_string()))?
-            };
-
-            (db, available_dbs)
+            }
         }
         None => return Err(ApiError::NotFound(format!("Dump {} not found", id))),
     };
-
-    let _ = available_dbs; // Suppress unused warning
 
     let limit = query.limit.unwrap_or(50).min(1000);
     let offset = query.offset.unwrap_or(0);

@@ -350,13 +350,44 @@ pub async fn get_dump_databases(
                 primary.clone().map_or(vec![], |p| vec![p])
             });
 
-            Ok(Json(DatabaseListResponse { databases, primary }))
+            // Extract user-friendly database names from sandbox names
+            // Prefixed format: sandbox_{dump_id}_{original_db_name}
+            // Non-prefixed format: just the original db name
+            let user_friendly_databases: Vec<String> = databases
+                .iter()
+                .map(|db| extract_original_db_name(db))
+                .collect();
+
+            let user_friendly_primary = primary.as_ref().map(|p| extract_original_db_name(p));
+
+            Ok(Json(DatabaseListResponse {
+                databases: user_friendly_databases,
+                primary: user_friendly_primary,
+            }))
         }
         None => Err(ApiError::NotFound(format!(
             "Dump {} not found or not ready",
             id
         ))),
     }
+}
+
+/// Extract the original database name from a sandbox database name
+///
+/// Prefixed format: sandbox_{dump_id}_{original_db_name} -> original_db_name
+/// Non-prefixed format: original_db_name -> original_db_name
+fn extract_original_db_name(sandbox_name: &str) -> String {
+    if sandbox_name.starts_with("sandbox_") {
+        // Format: sandbox_{uuid_with_underscores}_{db_name}
+        // UUID format: xxxxxxxx_xxxx_xxxx_xxxx_xxxxxxxxxxxx (36 chars with hyphens -> 36 chars with underscores)
+        // Total prefix: "sandbox_" (8) + uuid (36) + "_" (1) = 45 chars
+        if sandbox_name.len() > 45 && sandbox_name.chars().nth(44) == Some('_') {
+            // Extract everything after position 45
+            return sandbox_name[45..].to_string();
+        }
+    }
+    // Return as-is if not in the expected format
+    sandbox_name.to_string()
 }
 
 /// Delete a dump and clean up associated resources

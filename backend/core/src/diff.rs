@@ -48,6 +48,9 @@ pub struct TableDiff {
     pub compare_row_count: Option<i64>,
     /// Column differences (only for modified tables)
     pub column_diffs: Vec<ColumnDiff>,
+    /// Whether this table has data changes (row count difference)
+    #[serde(default)]
+    pub has_data_change: bool,
 }
 
 /// Difference in a column
@@ -171,6 +174,7 @@ pub fn compare_schemas(base: &SchemaGraph, compare: &SchemaGraph) -> SchemaDiff 
                     compare_info: Some(c.into()),
                 })
                 .collect(),
+            has_data_change: true,
         });
     }
 
@@ -197,10 +201,11 @@ pub fn compare_schemas(base: &SchemaGraph, compare: &SchemaGraph) -> SchemaDiff 
                     compare_info: None,
                 })
                 .collect(),
+            has_data_change: true,
         });
     }
 
-    // Find modified tables
+    // Find modified tables and unchanged tables
     for key in base_keys.intersection(&compare_keys) {
         let base_table = base_tables[key];
         let compare_table = compare_tables[key];
@@ -209,6 +214,8 @@ pub fn compare_schemas(base: &SchemaGraph, compare: &SchemaGraph) -> SchemaDiff 
 
         let row_diff = compare_table.estimated_row_count - base_table.estimated_row_count;
         summary.row_count_change += row_diff;
+
+        let has_data_change = row_diff != 0;
 
         // Count column changes
         for cd in &column_diffs {
@@ -219,21 +226,26 @@ pub fn compare_schemas(base: &SchemaGraph, compare: &SchemaGraph) -> SchemaDiff 
             }
         }
 
-        // Only include if there are actual changes
-        if !column_diffs.is_empty() || row_diff != 0 {
-            if !column_diffs.is_empty() {
-                summary.tables_modified += 1;
-            }
-
-            table_diffs.push(TableDiff {
-                schema_name: base_table.schema_name.clone(),
-                table_name: base_table.table_name.clone(),
-                change_type: ChangeType::Modified,
-                base_row_count: Some(base_table.estimated_row_count),
-                compare_row_count: Some(compare_table.estimated_row_count),
-                column_diffs,
-            });
+        // Only include tables that have actual changes (schema or data)
+        // Skip tables with no changes at all
+        if column_diffs.is_empty() && !has_data_change {
+            continue;
         }
+
+        // Count as "modified" if there are schema changes
+        if !column_diffs.is_empty() {
+            summary.tables_modified += 1;
+        }
+
+        table_diffs.push(TableDiff {
+            schema_name: base_table.schema_name.clone(),
+            table_name: base_table.table_name.clone(),
+            change_type: ChangeType::Modified,
+            base_row_count: Some(base_table.estimated_row_count),
+            compare_row_count: Some(compare_table.estimated_row_count),
+            column_diffs,
+            has_data_change,
+        });
     }
 
     // Compare foreign keys

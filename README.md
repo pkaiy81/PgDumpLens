@@ -19,7 +19,11 @@ PostgreSQL のダンプファイルをアップロードし、データベース
 - **値フィルター/サジェスト**: カラムの値でフィルタリング、頻出値のサジェスト機能
 - **リレーション探索**: セルクリックで関連テーブル・JOIN パス・SQL サンプルを表示
 - **影響リスク評価**: データ変更時の影響範囲をスコア化 (CASCADE 依存などを考慮)
-- **ダンプ差分比較**: 2つのダンプ間のスキーマ差分を可視化（テーブル/カラム/外部キー）
+- **ダンプ差分比較**: 2つのダンプ間のスキーマ差分＆データ差分を可視化
+  - スキーマ差分: テーブル/カラム/外部キーの追加・削除・変更
+  - データ差分: MD5チェックサムによるデータ変更の自動検出
+  - テーブル単位でのデータ差分表示（行単位での変更確認）
+- **ダークモード対応**: 全UIコンポーネントがダークモードに対応
 - **TTL 付き自動削除**: 一定時間後にダンプを自動クリーンアップ
 
 ### 📦 対応ファイル形式
@@ -644,6 +648,9 @@ kubectl get svc -n pgdumplens
 | `/api/dumps/{id}/relation/explain`                      | POST     | リレーション解説           |
 | `/api/dumps/{id}/risk/table/{schema}/{table}`           | GET      | テーブルリスク評価         |
 | `/api/dumps/{id}/risk/column/{schema}/{table}/{column}` | GET      | カラムリスク評価           |
+| `/api/dumps/{id}/compare/{compare_id}`                  | GET      | スキーマ差分比較           |
+| `/api/dumps/{id}/compare/{compare_id}/data-diff`        | GET      | テーブルデータ差分取得     |
+| `/api/dumps/{id}/search`                                | GET      | 全文検索                   |
 | `/api/dumps/by-slug/{slug}`                             | GET      | Slug でダンプ取得          |
 
 ## 🎯 リスク評価ロジック
@@ -741,7 +748,11 @@ users.id = 123 をクリック
 - **Value Filtering**: Filter by column values with frequent value suggestions
 - **Relationship Explorer**: Click cells to view related tables, JOIN paths, and sample SQL
 - **Impact Risk Assessment**: Score the impact of data changes (considering CASCADE dependencies)
-- **Dump Diff Comparison**: Visualize schema differences between two dumps (tables/columns/FKs)
+- **Dump Diff Comparison**: Visualize schema and data differences between two dumps
+  - Schema diff: tables/columns/foreign keys additions, deletions, modifications
+  - Data diff: Auto-detect data changes via MD5 checksums
+  - Per-table data comparison with row-level diff view
+- **Dark Mode Support**: Full dark mode support for all UI components
 - **TTL Auto-Deletion**: Automatic cleanup of dumps after a specified time
 
 ### Quick Start

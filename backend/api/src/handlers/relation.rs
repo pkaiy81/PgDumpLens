@@ -35,6 +35,24 @@ pub struct ExplainRelationResponse {
     pub sql_examples: Vec<String>,
 }
 
+/// Find sandbox database name for a given original database name
+///
+/// For pg_dumpall dumps, sandbox databases are named: sandbox_{dump_id}_{original_db_name}
+/// This function looks through the sandbox_databases array to find a match.
+fn find_sandbox_db_for_original(
+    sandbox_databases: &[String],
+    original_db_name: &str,
+) -> Option<String> {
+    // Look for a sandbox database that:
+    // 1. Ends with _{original_db_name} (prefixed format: sandbox_{dump_id}_{db_name})
+    // 2. OR exactly matches original_db_name (old format: db_name directly)
+    let suffix = format!("_{}", original_db_name);
+    sandbox_databases
+        .iter()
+        .find(|db| db.ends_with(&suffix) || *db == original_db_name)
+        .cloned()
+}
+
 /// Explain relationships for a value
 pub async fn explain_relation(
     State(state): State<AppState>,
@@ -43,38 +61,59 @@ pub async fn explain_relation(
 ) -> ApiResult<Json<ExplainRelationResponse>> {
     let _max_hops = req.max_hops.unwrap_or(2).min(5);
 
-    // Determine which database to use
-    let database_name = if let Some(ref db) = req.database {
-        db.clone()
+    // Get dump info including sandbox databases
+    let row = sqlx::query(
+        r#"
+        SELECT sandbox_db_name, sandbox_databases
+        FROM dumps
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound(format!("Dump {} not found", id)))?;
+
+    let primary_sandbox_db: Option<String> = row.get("sandbox_db_name");
+    let sandbox_databases: Option<Vec<String>> = row.get("sandbox_databases");
+
+    // Determine which sandbox database to use
+    // If req.database is specified (original db name like "platform"),
+    // we need to find the full sandbox name (like "sandbox_abc123_platform")
+    let sandbox_db_name = if let Some(ref original_db) = req.database {
+        // User specified a database - find the corresponding sandbox database
+        if let Some(ref dbs) = sandbox_databases {
+            find_sandbox_db_for_original(dbs, original_db)
+                .or_else(|| primary_sandbox_db.clone())
+                .ok_or_else(|| {
+                    ApiError::NotFound(format!("Database {} not found in dump", original_db))
+                })?
+        } else {
+            // No sandbox_databases array, use primary
+            primary_sandbox_db
+                .ok_or_else(|| ApiError::NotFound(format!("No database found for dump {}", id)))?
+        }
     } else {
-        // Get primary database name or first available database
-        let row = sqlx::query(
-            r#"
-            SELECT sandbox_db_name, sandbox_databases
-            FROM dumps
-            WHERE id = $1
-            "#,
-        )
-        .bind(id)
-        .fetch_optional(&state.db_pool)
-        .await?
-        .ok_or_else(|| ApiError::NotFound(format!("Dump {} not found", id)))?;
-
-        let sandbox_db_name: Option<String> = row.get("sandbox_db_name");
-        let sandbox_databases: Option<Vec<String>> = row.get("sandbox_databases");
-
+        // No database specified - use first from sandbox_databases or primary
         sandbox_databases
             .and_then(|dbs| dbs.first().cloned())
-            .or(sandbox_db_name)
+            .or(primary_sandbox_db)
             .ok_or_else(|| ApiError::NotFound(format!("No database found for dump {}", id)))?
     };
 
+    tracing::info!(
+        "explain_relation: sandbox_db={} for dump {}",
+        sandbox_db_name,
+        id
+    );
+
     // Fetch schema graph for the specific database
+    // dump_schemas stores the full sandbox database name (e.g., sandbox_abc123_platform)
     let schema_row = sqlx::query(
         "SELECT schema_graph FROM dump_schemas WHERE dump_id = $1 AND database_name = $2",
     )
     .bind(id)
-    .bind(&database_name)
+    .bind(&sandbox_db_name)
     .fetch_optional(&state.db_pool)
     .await?;
 

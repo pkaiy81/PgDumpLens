@@ -6,11 +6,22 @@ import {
   TableDiff,
   ColumnDiff,
   ChangeType,
+  TableDataDiffResponse,
 } from '@/types';
+import DataDiffViewer from './DataDiffViewer';
+
+interface TableSummary {
+  schema_name: string;
+  table_name: string;
+  estimated_row_count: number | null;
+}
 
 interface DiffViewerProps {
   diff: SchemaDiffResponse;
   onClose?: () => void;
+  onViewTableData?: (schema: string, table: string) => Promise<TableDataDiffResponse | null>;
+  /** All tables from the base schema, for comparing tables not detected in schema diff */
+  allTables?: TableSummary[];
 }
 
 const changeTypeColors: Record<ChangeType, { bg: string; text: string; border: string }> = {
@@ -112,7 +123,7 @@ function ColumnDiffRow({ columnDiff }: { columnDiff: ColumnDiff }) {
   );
 }
 
-function TableDiffCard({ tableDiff }: { tableDiff: TableDiff }) {
+function TableDiffCard({ tableDiff, onViewData }: { tableDiff: TableDiff; onViewData?: () => void }) {
   const [expanded, setExpanded] = useState(tableDiff.change_type !== 'removed');
   const colors = changeTypeColors[tableDiff.change_type];
   
@@ -132,6 +143,17 @@ function TableDiffCard({ tableDiff }: { tableDiff: TableDiff }) {
           </span>
         </div>
         <div className="flex items-center gap-4 text-sm">
+          {onViewData && tableDiff.change_type !== 'added' && tableDiff.change_type !== 'removed' && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onViewData();
+              }}
+              className="px-2 py-1 text-xs font-medium bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 rounded hover:bg-indigo-200 dark:hover:bg-indigo-900/70 transition-colors"
+            >
+              📊 View Data Diff
+            </button>
+          )}
           <span className="text-gray-600 dark:text-slate-400">
             {tableDiff.base_row_count ?? '—'} → {tableDiff.compare_row_count ?? '—'} rows
             {rowCountChange !== 0 && (
@@ -175,16 +197,116 @@ function TableDiffCard({ tableDiff }: { tableDiff: TableDiff }) {
   );
 }
 
-export default function DiffViewer({ diff, onClose }: DiffViewerProps) {
-  const [filter, setFilter] = useState<ChangeType | 'all'>('all');
+export default function DiffViewer({ diff, onClose, onViewTableData, allTables }: DiffViewerProps) {
+  const [filter, setFilter] = useState<ChangeType | 'all' | 'data-only' | 'check-all'>('all');
+  const [selectedTableDataDiff, setSelectedTableDataDiff] = useState<TableDataDiffResponse | null>(null);
+  const [loadingDataDiff, setLoadingDataDiff] = useState(false);
+  const [dataDiffError, setDataDiffError] = useState<string | null>(null);
+  
+  // Tables with schema changes
+  const schemaChangedTables = diff.table_diffs.filter(
+    (t) => t.change_type !== 'modified' || t.column_diffs.length > 0
+  );
+  
+  // Tables with no schema changes (unchanged schema, but might have data changes)
+  const unchangedSchemaTables = diff.table_diffs.filter(
+    (t) => t.change_type === 'modified' && t.column_diffs.length === 0
+  );
+  
+  // Tables with data-only changes (no schema changes but row count differs)
+  const dataOnlyTables = diff.table_diffs.filter(
+    (t) => t.change_type === 'modified' && t.column_diffs.length === 0 && t.has_data_change
+  );
+  
+  // Tables that exist in schema but not in diff (unchanged tables)
+  const tablesInDiff = new Set(
+    diff.table_diffs.map((t) => `${t.schema_name}.${t.table_name}`)
+  );
+  const unchangedTables: TableSummary[] = (allTables || []).filter(
+    (t) => !tablesInDiff.has(`${t.schema_name}.${t.table_name}`)
+  );
   
   const filteredTables = diff.table_diffs.filter(
-    (t) => filter === 'all' || t.change_type === filter
+    (t) => {
+      if (filter === 'all') return true;
+      if (filter === 'data-only') {
+        return t.change_type === 'modified' && t.column_diffs.length === 0 && t.has_data_change;
+      }
+      if (filter === 'check-all') return false; // Don't show diff tables in check-all mode
+      return t.change_type === filter;
+    }
   );
   
   const filteredFks = diff.fk_diffs.filter(
     (fk) => filter === 'all' || fk.change_type === filter
   );
+  
+  const handleViewTableData = async (schema: string, table: string) => {
+    if (!onViewTableData) return;
+    
+    setLoadingDataDiff(true);
+    setDataDiffError(null);
+    try {
+      const dataDiff = await onViewTableData(schema, table);
+      if (dataDiff) {
+        setSelectedTableDataDiff(dataDiff);
+      } else {
+        setDataDiffError('Failed to fetch data diff. The table may not exist in both dumps.');
+      }
+    } catch (err) {
+      setDataDiffError(err instanceof Error ? err.message : 'Failed to fetch data diff');
+    } finally {
+      setLoadingDataDiff(false);
+    }
+  };
+  
+  // If viewing data diff, show that instead
+  if (selectedTableDataDiff) {
+    return (
+      <div className="max-w-6xl mx-auto p-4">
+        <button
+          onClick={() => setSelectedTableDataDiff(null)}
+          className="mb-4 px-3 py-1 text-sm text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors flex items-center gap-2"
+        >
+          ← Back to Schema Diff
+        </button>
+        <DataDiffViewer 
+          diff={selectedTableDataDiff} 
+          onClose={() => setSelectedTableDataDiff(null)} 
+        />
+      </div>
+    );
+  }
+  
+  if (loadingDataDiff) {
+    return (
+      <div className="max-w-6xl mx-auto p-4 text-center py-12">
+        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-500 mx-auto mb-4"></div>
+        <p className="text-slate-500 dark:text-slate-400">Loading data diff...</p>
+      </div>
+    );
+  }
+  
+  if (dataDiffError) {
+    return (
+      <div className="max-w-6xl mx-auto p-4">
+        <button
+          onClick={() => {
+            setDataDiffError(null);
+            setFilter('all');
+          }}
+          className="mb-4 px-3 py-1 text-sm text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors flex items-center gap-2"
+        >
+          ← Back to Schema Diff
+        </button>
+        <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg p-6 text-center">
+          <div className="text-4xl mb-2">⚠️</div>
+          <p className="text-red-600 dark:text-red-400 mb-2">Failed to load data diff</p>
+          <p className="text-sm text-red-500 dark:text-red-500">{dataDiffError}</p>
+        </div>
+      </div>
+    );
+  }
   
   return (
     <div className="max-w-6xl mx-auto p-4">
@@ -209,7 +331,7 @@ export default function DiffViewer({ diff, onClose }: DiffViewerProps) {
       <DiffSummaryCard diff={diff} />
       
       {/* Filter */}
-      <div className="flex gap-2 mb-4">
+      <div className="flex gap-2 mb-4 flex-wrap">
         <button
           onClick={() => setFilter('all')}
           className={`px-3 py-1 rounded text-sm ${
@@ -250,24 +372,126 @@ export default function DiffViewer({ diff, onClose }: DiffViewerProps) {
         >
           Modified ({diff.table_diffs.filter((t) => t.change_type === 'modified').length})
         </button>
-      </div>
-      
-      {/* Table Diffs */}
-      <div className="mb-6">
-        <h3 className="text-lg font-semibold text-gray-700 dark:text-slate-300 mb-3">
-          Tables ({filteredTables.length})
-        </h3>
-        {filteredTables.length === 0 ? (
-          <div className="text-gray-500 dark:text-slate-400 text-sm">No table changes in this category.</div>
-        ) : (
-          filteredTables.map((tableDiff) => (
-            <TableDiffCard
-              key={`${tableDiff.schema_name}.${tableDiff.table_name}`}
-              tableDiff={tableDiff}
-            />
-          ))
+        {dataOnlyTables.length > 0 && (
+          <button
+            onClick={() => setFilter('data-only')}
+            className={`px-3 py-1 rounded text-sm ${
+              filter === 'data-only'
+                ? 'bg-indigo-600 text-white'
+                : 'bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-200 dark:hover:bg-indigo-900/70'
+            }`}
+          >
+            📊 Data Changed ({dataOnlyTables.length})
+          </button>
+        )}
+        {unchangedTables.length > 0 && onViewTableData && (
+          <button
+            onClick={() => setFilter('check-all')}
+            className={`px-3 py-1 rounded text-sm ${
+              filter === 'check-all'
+                ? 'bg-purple-600 text-white'
+                : 'bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 hover:bg-purple-200 dark:hover:bg-purple-900/70'
+            }`}
+          >
+            🔍 Check All Tables ({unchangedTables.length})
+          </button>
         )}
       </div>
+      
+      {/* Info message when no changes */}
+      {diff.table_diffs.length === 0 && filter !== 'check-all' && (
+        <div className="text-center py-12 bg-slate-50 dark:bg-slate-800 rounded-lg border border-slate-200 dark:border-slate-700">
+          <div className="text-6xl mb-4">✓</div>
+          <p className="text-lg font-medium text-slate-700 dark:text-slate-300 mb-2">
+            No schema or data changes detected
+          </p>
+          <p className="text-sm text-slate-500 dark:text-slate-400">
+            Both dumps have identical table structures and row counts.
+            {unchangedTables.length > 0 && onViewTableData && (
+              <> Click &quot;Check All Tables&quot; to compare row data for tables with no detected changes.</>
+            )}
+          </p>
+        </div>
+      )}
+      
+      {/* Data-only changes info message */}
+      {filter === 'data-only' && dataOnlyTables.length > 0 && (
+        <div className="mb-4 p-4 bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800 rounded-lg">
+          <p className="text-sm text-indigo-800 dark:text-indigo-300">
+            💡 <strong>Data Changes Only:</strong> These tables have <strong>row count differences</strong> but no schema changes (same columns, types, constraints).
+          </p>
+          <p className="text-sm text-indigo-700 dark:text-indigo-400 mt-2">
+            Click &quot;View Data Diff&quot; to see detailed row-level changes.
+          </p>
+        </div>
+      )}
+      
+      {/* Check All Tables mode - show unchanged tables */}
+      {filter === 'check-all' && unchangedTables.length > 0 && (
+        <div className="mb-6">
+          <div className="mb-4 p-4 bg-purple-50 dark:bg-purple-900/20 border border-purple-200 dark:border-purple-800 rounded-lg">
+            <p className="text-sm text-purple-800 dark:text-purple-300">
+              🔍 <strong>Check All Tables:</strong> These tables have <strong>no detected schema or row count changes</strong>, but data content may have changed.
+            </p>
+            <p className="text-sm text-purple-700 dark:text-purple-400 mt-2">
+              Click &quot;View Data Diff&quot; to compare actual row data and find content-level changes.
+            </p>
+          </div>
+          <h3 className="text-lg font-semibold text-gray-700 dark:text-slate-300 mb-3">
+            Unchanged Tables ({unchangedTables.length})
+          </h3>
+          <div className="space-y-2">
+            {unchangedTables.map((table) => (
+              <div
+                key={`${table.schema_name}.${table.table_name}`}
+                className="flex items-center justify-between p-3 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg"
+              >
+                <div className="flex items-center gap-3">
+                  <span className="px-2 py-0.5 text-xs font-medium rounded bg-slate-200 dark:bg-slate-700 text-slate-600 dark:text-slate-400">
+                    unchanged
+                  </span>
+                  <span className="font-medium text-slate-700 dark:text-slate-300">
+                    {table.schema_name}.{table.table_name}
+                  </span>
+                </div>
+                <div className="flex items-center gap-4 text-sm">
+                  <span className="text-slate-500 dark:text-slate-400">
+                    {table.estimated_row_count ?? '—'} rows
+                  </span>
+                  {onViewTableData && (
+                    <button
+                      onClick={() => handleViewTableData(table.schema_name, table.table_name)}
+                      className="px-2 py-1 text-xs font-medium bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 rounded hover:bg-purple-200 dark:hover:bg-purple-900/70 transition-colors"
+                    >
+                      📊 View Data Diff
+                    </button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      
+      {/* Table Diffs */}
+      {diff.table_diffs.length > 0 && filter !== 'check-all' && (
+        <div className="mb-6">
+          <h3 className="text-lg font-semibold text-gray-700 dark:text-slate-300 mb-3">
+            Tables ({filteredTables.length})
+          </h3>
+          {filteredTables.length === 0 ? (
+            <div className="text-gray-500 dark:text-slate-400 text-sm">No table changes in this category.</div>
+          ) : (
+            filteredTables.map((tableDiff) => (
+              <TableDiffCard
+                key={`${tableDiff.schema_name}.${tableDiff.table_name}`}
+                tableDiff={tableDiff}
+                onViewData={onViewTableData ? () => handleViewTableData(tableDiff.schema_name, tableDiff.table_name) : undefined}
+              />
+            ))
+          )}
+        </div>
+      )}
       
       {/* Foreign Key Diffs */}
       {filteredFks.length > 0 && (

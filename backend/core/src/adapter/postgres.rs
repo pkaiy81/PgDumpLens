@@ -195,6 +195,112 @@ impl PostgresAdapter {
         info!("Detected pg_dumpall format with databases: {:?}", databases);
         Ok(databases)
     }
+
+    /// Rewrite pg_dumpall SQL to rename databases with a prefix
+    /// This allows multiple pg_dumpall dumps to coexist in the sandbox
+    fn rewrite_pg_dumpall_with_prefix(
+        &self,
+        dump_path: &str,
+        prefix: &str,
+    ) -> Result<(String, Vec<String>)> {
+        use std::io::{BufRead, Write};
+
+        let path = Path::new(dump_path);
+        let file = File::open(path)
+            .map_err(|e| CoreError::RestoreFailed(format!("Failed to open dump file: {}", e)))?;
+        let reader = BufReader::new(file);
+
+        // Output file with rewritten content
+        let rewritten_path = format!("{}.rewritten", dump_path);
+        let mut output = File::create(&rewritten_path).map_err(|e| {
+            CoreError::RestoreFailed(format!("Failed to create rewritten dump: {}", e))
+        })?;
+
+        let mut databases = Vec::new();
+        let mut db_name_map: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
+
+        // First pass: identify database names
+        for line in reader.lines().map_while(|r| r.ok()) {
+            if line.starts_with("CREATE DATABASE ") {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 3 {
+                    let original_name = parts[2].trim_end_matches(';').to_string();
+                    if original_name != "template0"
+                        && original_name != "template1"
+                        && original_name != "postgres"
+                    {
+                        let new_name = format!("{}_{}", prefix, original_name);
+                        db_name_map.insert(original_name, new_name);
+                    }
+                }
+            }
+        }
+
+        // Build prefixed database list
+        for new_name in db_name_map.values() {
+            databases.push(new_name.clone());
+        }
+
+        // Second pass: rewrite the dump
+        let file = File::open(path)
+            .map_err(|e| CoreError::RestoreFailed(format!("Failed to open dump file: {}", e)))?;
+        let reader = BufReader::new(file);
+
+        for line in reader.lines() {
+            let line =
+                line.map_err(|e| CoreError::RestoreFailed(format!("Failed to read line: {}", e)))?;
+
+            let mut rewritten_line = line.clone();
+
+            // Rewrite CREATE DATABASE statements
+            if line.starts_with("CREATE DATABASE ") {
+                for (original, prefixed) in &db_name_map {
+                    // Match exact database name (avoiding partial matches)
+                    let pattern = format!("CREATE DATABASE {} ", original);
+                    let replacement = format!("CREATE DATABASE {} ", prefixed);
+                    rewritten_line = rewritten_line.replace(&pattern, &replacement);
+
+                    let pattern = format!("CREATE DATABASE {};", original);
+                    let replacement = format!("CREATE DATABASE {};", prefixed);
+                    rewritten_line = rewritten_line.replace(&pattern, &replacement);
+                }
+            }
+
+            // Rewrite \connect statements
+            if line.starts_with("\\connect ") {
+                for (original, prefixed) in &db_name_map {
+                    let pattern = format!("\\connect {}", original);
+                    let replacement = format!("\\connect {}", prefixed);
+                    rewritten_line = rewritten_line.replace(&pattern, &replacement);
+                }
+            }
+
+            // Rewrite GRANT/REVOKE ON DATABASE statements
+            if (line.contains("ON DATABASE") || line.contains("DATABASE "))
+                && (line.starts_with("GRANT")
+                    || line.starts_with("REVOKE")
+                    || line.starts_with("ALTER DATABASE"))
+            {
+                for (original, prefixed) in &db_name_map {
+                    rewritten_line = rewritten_line
+                        .replace(&format!(" {} ", original), &format!(" {} ", prefixed));
+                    rewritten_line = rewritten_line
+                        .replace(&format!(" {};", original), &format!(" {};", prefixed));
+                }
+            }
+
+            writeln!(output, "{}", rewritten_line).map_err(|e| {
+                CoreError::RestoreFailed(format!("Failed to write rewritten dump: {}", e))
+            })?;
+        }
+
+        info!(
+            "Rewrote pg_dumpall with prefix '{}', databases: {:?}",
+            prefix, databases
+        );
+        Ok((rewritten_path, databases))
+    }
 }
 
 #[async_trait]
@@ -213,15 +319,19 @@ impl DbAdapter for PostgresAdapter {
             Vec::new()
         };
 
-        // Determine the database names that will be available after restore
-        let restored_databases = if !pg_dumpall_databases.is_empty() {
+        // For pg_dumpall, rewrite the dump with prefixed database names
+        // This allows multiple dumps to coexist without overwriting each other
+        let (restore_path, restored_databases) = if !pg_dumpall_databases.is_empty() {
             info!(
                 "pg_dumpall format detected, databases in dump: {:?}",
                 pg_dumpall_databases
             );
-            pg_dumpall_databases.clone()
+            // Use db_name as prefix (e.g., "sandbox_abc123")
+            let (rewritten_path, prefixed_dbs) =
+                self.rewrite_pg_dumpall_with_prefix(&actual_path, db_name)?;
+            (rewritten_path, prefixed_dbs)
         } else {
-            vec![db_name.to_string()]
+            (actual_path.clone(), vec![db_name.to_string()])
         };
 
         // Create database first (only for non-pg_dumpall dumps)
@@ -282,7 +392,7 @@ impl DbAdapter for PostgresAdapter {
             }
         } else {
             // Plain SQL format - use psql command for proper handling of COPY statements
-            info!("Executing SQL file with psql");
+            info!("Executing SQL file with psql: {}", restore_path);
 
             // For pg_dumpall format, connect to postgres database (default)
             // The dump itself will create and connect to the target databases
@@ -305,7 +415,7 @@ impl DbAdapter for PostgresAdapter {
                 "-v",
                 "ON_ERROR_STOP=0", // Continue on errors
                 "-f",
-                &actual_path,
+                &restore_path, // Use the (possibly rewritten) dump path
             ]);
 
             if let Some(ref password) = self.password {
