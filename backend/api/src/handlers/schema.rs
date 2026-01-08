@@ -15,7 +15,7 @@ use db_viewer_core::domain::SchemaGraph;
 use db_viewer_core::schema::generate_mermaid_er;
 
 /// Extract the original database name from a sandbox database name
-/// 
+///
 /// Prefixed format: sandbox_{uuid_with_underscores}_{original_db_name} -> original_db_name
 /// Non-prefixed format: original_db_name -> original_db_name
 fn extract_original_db_name(sandbox_name: &str) -> String {
@@ -31,9 +31,12 @@ fn extract_original_db_name(sandbox_name: &str) -> String {
 }
 
 /// Find sandbox database name for a given user-friendly database name
-/// 
+///
 /// Searches through sandbox_databases to find one that matches the original name.
-fn find_sandbox_db_name(sandbox_databases: &Option<Vec<String>>, user_db_name: &str) -> Option<String> {
+fn find_sandbox_db_name(
+    sandbox_databases: &Option<Vec<String>>,
+    user_db_name: &str,
+) -> Option<String> {
     if let Some(dbs) = sandbox_databases {
         let suffix = format!("_{}", user_db_name);
         dbs.iter()
@@ -84,17 +87,16 @@ pub async fn get_schema(
     let requested_db = if let Some(ref user_db) = query.database {
         // User requested a specific database by user-friendly name
         // Find the corresponding sandbox database name
-        let sandbox_db = find_sandbox_db_name(&available_dbs, user_db)
-            .or_else(|| {
-                // Check if user_db matches primary_db directly or as extracted name
-                primary_db.as_ref().and_then(|pdb| {
-                    if pdb == user_db || extract_original_db_name(pdb) == *user_db {
-                        Some(pdb.clone())
-                    } else {
-                        None
-                    }
-                })
-            });
+        let sandbox_db = find_sandbox_db_name(&available_dbs, user_db).or_else(|| {
+            // Check if user_db matches primary_db directly or as extracted name
+            primary_db.as_ref().and_then(|pdb| {
+                if pdb == user_db || extract_original_db_name(pdb) == *user_db {
+                    Some(pdb.clone())
+                } else {
+                    None
+                }
+            })
+        });
 
         match sandbox_db {
             Some(db) => db,
@@ -103,7 +105,12 @@ pub async fn get_schema(
                 let friendly_names: Vec<String> = available_dbs
                     .as_ref()
                     .map(|dbs| dbs.iter().map(|d| extract_original_db_name(d)).collect())
-                    .unwrap_or_else(|| primary_db.iter().map(|p| extract_original_db_name(p)).collect());
+                    .unwrap_or_else(|| {
+                        primary_db
+                            .iter()
+                            .map(|p| extract_original_db_name(p))
+                            .collect()
+                    });
                 return Err(ApiError::BadRequest(format!(
                     "Database '{}' is not available for this dump. Available: {:?}",
                     user_db, friendly_names
@@ -217,7 +224,12 @@ pub async fn get_table_data(
                         let friendly_names: Vec<String> = available_dbs
                             .as_ref()
                             .map(|dbs| dbs.iter().map(|d| extract_original_db_name(d)).collect())
-                            .unwrap_or_else(|| primary_db.iter().map(|p| extract_original_db_name(p)).collect());
+                            .unwrap_or_else(|| {
+                                primary_db
+                                    .iter()
+                                    .map(|p| extract_original_db_name(p))
+                                    .collect()
+                            });
                         ApiError::BadRequest(format!(
                             "Database '{}' is not available for this dump. Available: {:?}",
                             user_db, friendly_names
