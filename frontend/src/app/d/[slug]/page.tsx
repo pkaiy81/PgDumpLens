@@ -84,7 +84,11 @@ export default function DumpDetailPage() {
   const [dump, setDump] = useState<Dump | null>(null);
   const [schema, setSchema] = useState<SchemaResponse | null>(null);
   const [databases, setDatabases] = useState<DatabaseList | null>(null);
-  const [selectedDb, setSelectedDb] = useState<string | null>(null);
+  
+  // Get database from URL for persistence
+  const dbFromUrl = searchParams.get('db');
+  const [selectedDb, setSelectedDb] = useState<string | null>(dbFromUrl);
+  
   const [loading, setLoading] = useState(true);
   const [schemaLoading, setSchemaLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -101,6 +105,9 @@ export default function DumpDetailPage() {
   );
   const [currentTable, setCurrentTable] = useState<string | null>(searchParams.get('table'));
   const [currentSchema, setCurrentSchema] = useState<string | null>(searchParams.get('schema'));
+  
+  // Compare dump ID from URL for persistence
+  const compareIdFromUrl = searchParams.get('compare');
   
   // Track if we're handling a popstate event to avoid pushing duplicate history
   const [isPopstate, setIsPopstate] = useState(false);
@@ -126,24 +133,6 @@ export default function DumpDetailPage() {
     setIsPopstate(false);
   }, [searchParams, isPopstate]);
   
-  // Listen for browser back/forward navigation
-  useEffect(() => {
-    const handlePopState = () => {
-      setIsPopstate(true);
-      const params = new URLSearchParams(window.location.search);
-      const tab = params.get('tab') as 'schema' | 'search' | 'compare' | null;
-      setActiveTab(tab || 'schema');
-      
-      // Update SchemaExplorer state from URL
-      setCurrentViewMode(params.get('view') as 'tables' | 'relationships' | 'columns' | 'table-detail' | 'data' | null);
-      setCurrentTable(params.get('table'));
-      setCurrentSchema(params.get('schema'));
-    };
-    
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
-  
   // Handle tab change with URL update
   const handleTabChange = useCallback((tab: 'schema' | 'search' | 'compare') => {
     setActiveTab(tab);
@@ -164,12 +153,44 @@ export default function DumpDetailPage() {
   }, [updateUrl]);
   
   // Diff comparison state
-  const [compareDumpId, setCompareDumpId] = useState<string | null>(null);
+  const [compareDumpId, setCompareDumpId] = useState<string | null>(compareIdFromUrl);
   const [diffResult, setDiffResult] = useState<SchemaDiffResponse | null>(null);
   const [diffLoading, setDiffLoading] = useState(false);
   const [diffError, setDiffError] = useState<string | null>(null);
   const [compareFile, setCompareFile] = useState<File | null>(null);
   const [compareUploading, setCompareUploading] = useState(false);
+  
+  // Listen for browser back/forward navigation
+  useEffect(() => {
+    const handlePopState = () => {
+      setIsPopstate(true);
+      const params = new URLSearchParams(window.location.search);
+      const tab = params.get('tab') as 'schema' | 'search' | 'compare' | null;
+      setActiveTab(tab || 'schema');
+      
+      // Update SchemaExplorer state from URL
+      setCurrentViewMode(params.get('view') as 'tables' | 'relationships' | 'columns' | 'table-detail' | 'data' | null);
+      setCurrentTable(params.get('table'));
+      setCurrentSchema(params.get('schema'));
+      
+      // Update database selection from URL
+      const db = params.get('db');
+      if (db) {
+        setSelectedDb(db);
+      }
+      
+      // Update compare dump ID from URL
+      const compareId = params.get('compare');
+      if (compareId !== compareDumpId) {
+        setCompareDumpId(compareId);
+        // Clear existing diff result so it will be re-fetched
+        setDiffResult(null);
+      }
+    };
+    
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [compareDumpId]);
 
   const fetchDump = useCallback(async () => {
     try {
@@ -244,13 +265,15 @@ export default function DumpDetailPage() {
   const handleDatabaseChange = useCallback((newDb: string) => {
     if (dump && newDb !== selectedDb) {
       setSelectedDb(newDb);
+      // Save database selection to URL
+      updateUrl({ db: newDb });
       fetchSchema(dump.id, newDb);
       // Re-fetch diff if we have a comparison
       if (compareDumpId) {
         fetchDiff(dump.id, compareDumpId, newDb);
       }
     }
-  }, [dump, selectedDb, fetchSchema, compareDumpId, fetchDiff]);
+  }, [dump, selectedDb, fetchSchema, compareDumpId, fetchDiff, updateUrl]);
 
   // Handle compare dump file upload
   const handleCompareFileUpload = async (file: File) => {
@@ -311,6 +334,8 @@ export default function DumpDetailPage() {
       }
       
       setCompareDumpId(compareDump.id);
+      // Save compare dump ID to URL for persistence
+      updateUrl({ compare: compareDump.id, tab: 'compare' });
       
       // Fetch the diff
       const dbParam = selectedDb ? `?database=${encodeURIComponent(selectedDb)}` : '';
@@ -341,6 +366,8 @@ export default function DumpDetailPage() {
     setCompareDumpId(null);
     setDiffResult(null);
     setDiffError(null);
+    // Remove compare param from URL
+    updateUrl({ compare: null });
   };
 
   // Handle dump deletion
@@ -378,8 +405,8 @@ export default function DumpDetailPage() {
         if (dumpData.status === 'READY') {
           // Fetch available databases first
           const dbList = await fetchDatabases(dumpData.id);
-          // Determine which database to use
-          const dbToUse = dbList?.primary || (dbList?.databases && dbList.databases.length > 0 ? dbList.databases[0] : undefined);
+          // Use database from URL if available, otherwise determine default
+          const dbToUse = selectedDb || dbList?.primary || (dbList?.databases && dbList.databases.length > 0 ? dbList.databases[0] : undefined);
           // Set selected database if not already set
           if (dbToUse && !selectedDb) {
             setSelectedDb(dbToUse);
@@ -392,7 +419,8 @@ export default function DumpDetailPage() {
             const updated = await fetchDump();
             if (updated && updated.status === 'READY') {
               const dbList = await fetchDatabases(updated.id);
-              const dbToUse = dbList?.primary || (dbList?.databases && dbList.databases.length > 0 ? dbList.databases[0] : undefined);
+              // Use database from URL if available, otherwise determine default
+              const dbToUse = selectedDb || dbList?.primary || (dbList?.databases && dbList.databases.length > 0 ? dbList.databases[0] : undefined);
               if (dbToUse && !selectedDb) {
                 setSelectedDb(dbToUse);
               }
@@ -423,6 +451,38 @@ export default function DumpDetailPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchDump, fetchDatabases, fetchSchema]);
+
+  // Restore comparison diff from URL on page load
+  useEffect(() => {
+    if (dump && compareDumpId && !diffResult && !diffLoading && !diffError) {
+      // Verify the comparison dump still exists and is ready
+      const restoreComparison = async () => {
+        try {
+          const statusRes = await fetch(`/api/dumps/${compareDumpId}`);
+          if (!statusRes.ok) {
+            // Comparison dump no longer exists, clear the URL param
+            setCompareDumpId(null);
+            updateUrl({ compare: null }, true);
+            return;
+          }
+          const statusData = await statusRes.json();
+          if (statusData.status !== 'READY') {
+            // Comparison dump is not ready, clear it
+            setCompareDumpId(null);
+            updateUrl({ compare: null }, true);
+            return;
+          }
+          // Fetch the diff
+          await fetchDiff(dump.id, compareDumpId, selectedDb || undefined);
+        } catch (err) {
+          console.error('Failed to restore comparison:', err);
+          setCompareDumpId(null);
+          updateUrl({ compare: null }, true);
+        }
+      };
+      restoreComparison();
+    }
+  }, [dump, compareDumpId, diffResult, diffLoading, diffError, selectedDb, fetchDiff, updateUrl]);
 
   if (loading) {
     const statusMessage = dump?.status === 'RESTORING' 
