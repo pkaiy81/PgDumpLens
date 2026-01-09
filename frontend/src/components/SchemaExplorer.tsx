@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo, useCallback, useEffect } from 'react';
 import { MermaidDiagram } from './MermaidDiagram';
 import { RiskBadge } from './RiskBadge';
 import { DataTable } from './DataTable';
@@ -42,6 +42,11 @@ interface SchemaExplorerProps {
   schemaGraph: SchemaGraph;
   fullMermaidER: string;
   selectedDatabase?: string;
+  // URL state props for back/forward navigation
+  initialViewMode?: ViewMode;
+  initialSelectedSchema?: string | null;
+  initialSelectedTable?: string | null;
+  onStateChange?: (state: { viewMode?: string; selectedSchema?: string | null; selectedTable?: string | null }) => void;
 }
 
 type ViewMode = 'tables' | 'relationships' | 'columns' | 'table-detail' | 'data';
@@ -205,12 +210,54 @@ function generateTableRelationshipER(
   return output;
 }
 
-export function SchemaExplorer({ dumpId, schemaGraph, fullMermaidER, selectedDatabase }: SchemaExplorerProps) {
-  const [viewMode, setViewMode] = useState<ViewMode>('tables');
-  const [selectedSchema, setSelectedSchema] = useState<string | null>(null);
+export function SchemaExplorer({ 
+  dumpId, 
+  schemaGraph, 
+  fullMermaidER, 
+  selectedDatabase,
+  initialViewMode,
+  initialSelectedSchema,
+  initialSelectedTable,
+  onStateChange,
+}: SchemaExplorerProps) {
+  const [viewMode, setViewModeInternal] = useState<ViewMode>(initialViewMode || 'tables');
+  const [selectedSchema, setSelectedSchemaInternal] = useState<string | null>(initialSelectedSchema || null);
   const [selectedTable, setSelectedTable] = useState<Table | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [relationDegrees, setRelationDegrees] = useState(1);
+  const [initialized, setInitialized] = useState(false);
+  
+  // Wrapper functions to notify parent of state changes
+  const setViewMode = useCallback((mode: ViewMode) => {
+    setViewModeInternal(mode);
+    onStateChange?.({ viewMode: mode });
+  }, [onStateChange]);
+  
+  const setSelectedSchema = useCallback((schema: string | null) => {
+    setSelectedSchemaInternal(schema);
+    onStateChange?.({ selectedSchema: schema });
+  }, [onStateChange]);
+  
+  // Restore table selection from URL on initial load
+  useEffect(() => {
+    if (!initialized && initialSelectedTable && schemaGraph.tables.length > 0) {
+      const [schema, tableName] = initialSelectedTable.includes('.') 
+        ? initialSelectedTable.split('.') 
+        : ['public', initialSelectedTable];
+      const table = schemaGraph.tables.find(
+        t => t.schema_name === schema && t.table_name === tableName
+      );
+      if (table) {
+        setSelectedTable(table);
+        if (initialViewMode === 'table-detail' || initialViewMode === 'data') {
+          setViewModeInternal(initialViewMode);
+        }
+      }
+      setInitialized(true);
+    } else if (!initialized) {
+      setInitialized(true);
+    }
+  }, [initialized, initialSelectedTable, initialViewMode, schemaGraph.tables]);
   
   // State for relationship explorer
   const [relationshipExplorer, setRelationshipExplorer] = useState<{
@@ -323,8 +370,12 @@ export function SchemaExplorer({ dumpId, schemaGraph, fullMermaidER, selectedDat
 
   const handleTableClick = useCallback((table: Table) => {
     setSelectedTable(table);
-    setViewMode('table-detail');
-  }, []);
+    setViewModeInternal('table-detail');
+    onStateChange?.({ 
+      viewMode: 'table-detail', 
+      selectedTable: `${table.schema_name}.${table.table_name}` 
+    });
+  }, [onStateChange]);
 
   const getTableRelation = (table: Table) => {
     const key = `${table.schema_name}.${table.table_name}`;
@@ -491,7 +542,11 @@ export function SchemaExplorer({ dumpId, schemaGraph, fullMermaidER, selectedDat
               <div className="flex items-center justify-between">
                 <div>
                   <button
-                    onClick={() => setViewMode('tables')}
+                    onClick={() => {
+                      setViewMode('tables');
+                      setSelectedTable(null);
+                      onStateChange?.({ viewMode: 'tables', selectedTable: null });
+                    }}
                     className="text-sm text-indigo-600 dark:text-indigo-400 hover:underline mb-2 flex items-center gap-1"
                   >
                     ← Back to Tables
@@ -774,7 +829,10 @@ export function SchemaExplorer({ dumpId, schemaGraph, fullMermaidER, selectedDat
                   onChange={(e) => {
                     const [schema, table] = e.target.value.split('.');
                     const t = schemaGraph.tables.find(t => t.schema_name === schema && t.table_name === table);
-                    if (t) setSelectedTable(t);
+                    if (t) {
+                      setSelectedTable(t);
+                      onStateChange?.({ selectedTable: `${t.schema_name}.${t.table_name}` });
+                    }
                   }}
                   className="px-4 py-2 border border-slate-200 dark:border-slate-600 rounded-lg bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
                 >

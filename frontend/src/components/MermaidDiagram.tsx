@@ -70,30 +70,82 @@ export function MermaidDiagram({ chart, className = '', onExportSvg }: MermaidDi
   }, [svg]);
 
   // Export PNG
-  const handleExportPng = useCallback(() => {
+  const handleExportPng = useCallback(async () => {
     if (!svg) return;
     const svgEl = svgContainerRef.current?.querySelector('svg');
     if (!svgEl) return;
     
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    
-    const svgData = new XMLSerializer().serializeToString(svgEl);
-    const img = new Image();
-    const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' });
-    const url = URL.createObjectURL(svgBlob);
-    
-    img.onload = () => {
-      canvas.width = img.width * 2;
-      canvas.height = img.height * 2;
+    try {
+      // Clone the SVG to avoid modifying the original
+      const clonedSvg = svgEl.cloneNode(true) as SVGElement;
+      
+      // Ensure SVG has proper dimensions
+      const bbox = svgEl.getBBox();
+      const width = Math.ceil(bbox.width + 40);
+      const height = Math.ceil(bbox.height + 40);
+      
+      clonedSvg.setAttribute('width', String(width));
+      clonedSvg.setAttribute('height', String(height));
+      clonedSvg.setAttribute('viewBox', `${bbox.x - 20} ${bbox.y - 20} ${width} ${height}`);
+      
+      // Add white background
+      const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+      bgRect.setAttribute('x', String(bbox.x - 20));
+      bgRect.setAttribute('y', String(bbox.y - 20));
+      bgRect.setAttribute('width', String(width));
+      bgRect.setAttribute('height', String(height));
+      bgRect.setAttribute('fill', 'white');
+      clonedSvg.insertBefore(bgRect, clonedSvg.firstChild);
+      
+      // Serialize to string with proper XML declaration
+      const serializer = new XMLSerializer();
+      let svgString = serializer.serializeToString(clonedSvg);
+      
+      // Ensure proper namespace
+      if (!svgString.includes('xmlns=')) {
+        svgString = svgString.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
+      }
+      
+      // Create canvas with 2x scale for better quality
+      const canvas = document.createElement('canvas');
+      const scale = 2;
+      canvas.width = width * scale;
+      canvas.height = height * scale;
+      
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return;
+      
+      // Fill with white background
       ctx.fillStyle = 'white';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.scale(2, 2);
-      ctx.drawImage(img, 0, 0);
+      ctx.scale(scale, scale);
       
+      // Create image from SVG using data URL
+      const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });
+      const url = URL.createObjectURL(svgBlob);
+      
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      
+      await new Promise<void>((resolve, reject) => {
+        img.onload = () => {
+          ctx.drawImage(img, 0, 0);
+          URL.revokeObjectURL(url);
+          resolve();
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(url);
+          reject(new Error('Failed to load SVG image'));
+        };
+        img.src = url;
+      });
+      
+      // Convert to PNG and download
       canvas.toBlob((blob) => {
-        if (!blob) return;
+        if (!blob) {
+          console.error('Failed to create PNG blob');
+          return;
+        }
         const pngUrl = URL.createObjectURL(blob);
         const a = document.createElement('a');
         a.href = pngUrl;
@@ -102,12 +154,45 @@ export function MermaidDiagram({ chart, className = '', onExportSvg }: MermaidDi
         a.click();
         document.body.removeChild(a);
         URL.revokeObjectURL(pngUrl);
-      }, 'image/png');
+      }, 'image/png', 1.0);
       
-      URL.revokeObjectURL(url);
-    };
-    
-    img.src = url;
+    } catch (err) {
+      console.error('PNG export failed:', err);
+      // Fallback: try alternative method using canvas with inline SVG
+      try {
+        const fallbackCanvas = document.createElement('canvas');
+        const fallbackCtx = fallbackCanvas.getContext('2d');
+        if (!fallbackCtx) return;
+        
+        const rect = svgEl.getBoundingClientRect();
+        fallbackCanvas.width = rect.width * 2;
+        fallbackCanvas.height = rect.height * 2;
+        fallbackCtx.fillStyle = 'white';
+        fallbackCtx.fillRect(0, 0, fallbackCanvas.width, fallbackCanvas.height);
+        fallbackCtx.scale(2, 2);
+        
+        // Use html2canvas-like approach with foreignObject
+        const svgData = `data:image/svg+xml;base64,${btoa(unescape(encodeURIComponent(svg)))}`;
+        const fallbackImg = new Image();
+        fallbackImg.src = svgData;
+        
+        fallbackImg.onload = () => {
+          fallbackCtx.drawImage(fallbackImg, 0, 0);
+          fallbackCanvas.toBlob((blob) => {
+            if (!blob) return;
+            const pngUrl = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = pngUrl;
+            a.download = 'er-diagram.png';
+            a.click();
+            URL.revokeObjectURL(pngUrl);
+          }, 'image/png');
+        };
+      } catch (fallbackErr) {
+        console.error('Fallback PNG export also failed:', fallbackErr);
+        alert('PNG export failed. Please try exporting as SVG instead.');
+      }
+    }
   }, [svg]);
 
   // Zoom handlers

@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState, useCallback } from 'react';
-import { useParams, useRouter } from 'next/navigation';
+import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { SchemaExplorer } from '@/components/SchemaExplorer';
 import SearchResults from '@/components/SearchResults';
@@ -78,6 +78,7 @@ function formatDate(dateString: string): string {
 export default function DumpDetailPage() {
   const params = useParams();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const slug = params.slug as string;
 
   const [dump, setDump] = useState<Dump | null>(null);
@@ -89,7 +90,78 @@ export default function DumpDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [activeTab, setActiveTab] = useState<'schema' | 'search' | 'compare'>('schema');
+  
+  // Initialize activeTab from URL params
+  const tabFromUrl = searchParams.get('tab') as 'schema' | 'search' | 'compare' | null;
+  const [activeTab, setActiveTab] = useState<'schema' | 'search' | 'compare'>(tabFromUrl || 'schema');
+  
+  // SchemaExplorer state from URL - use state so it updates on popstate
+  const [currentViewMode, setCurrentViewMode] = useState<'tables' | 'relationships' | 'columns' | 'table-detail' | 'data' | null>(
+    searchParams.get('view') as 'tables' | 'relationships' | 'columns' | 'table-detail' | 'data' | null
+  );
+  const [currentTable, setCurrentTable] = useState<string | null>(searchParams.get('table'));
+  const [currentSchema, setCurrentSchema] = useState<string | null>(searchParams.get('schema'));
+  
+  // Track if we're handling a popstate event to avoid pushing duplicate history
+  const [isPopstate, setIsPopstate] = useState(false);
+  
+  // Update URL when state changes
+  const updateUrl = useCallback((newParams: Record<string, string | null>, replace = false) => {
+    const params = new URLSearchParams(searchParams.toString());
+    for (const [key, value] of Object.entries(newParams)) {
+      if (value === null || value === undefined || value === '') {
+        params.delete(key);
+      } else {
+        params.set(key, value);
+      }
+    }
+    const queryString = params.toString();
+    const newUrl = queryString ? `${window.location.pathname}?${queryString}` : window.location.pathname;
+    
+    if (replace || isPopstate) {
+      window.history.replaceState({ ...newParams }, '', newUrl);
+    } else {
+      window.history.pushState({ ...newParams }, '', newUrl);
+    }
+    setIsPopstate(false);
+  }, [searchParams, isPopstate]);
+  
+  // Listen for browser back/forward navigation
+  useEffect(() => {
+    const handlePopState = () => {
+      setIsPopstate(true);
+      const params = new URLSearchParams(window.location.search);
+      const tab = params.get('tab') as 'schema' | 'search' | 'compare' | null;
+      setActiveTab(tab || 'schema');
+      
+      // Update SchemaExplorer state from URL
+      setCurrentViewMode(params.get('view') as 'tables' | 'relationships' | 'columns' | 'table-detail' | 'data' | null);
+      setCurrentTable(params.get('table'));
+      setCurrentSchema(params.get('schema'));
+    };
+    
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+  
+  // Handle tab change with URL update
+  const handleTabChange = useCallback((tab: 'schema' | 'search' | 'compare') => {
+    setActiveTab(tab);
+    updateUrl({ tab: tab === 'schema' ? null : tab });
+  }, [updateUrl]);
+  
+  // Handle SchemaExplorer state changes
+  const handleSchemaExplorerStateChange = useCallback((state: {
+    viewMode?: string;
+    selectedSchema?: string | null;
+    selectedTable?: string | null;
+  }) => {
+    updateUrl({
+      view: state.viewMode === 'tables' ? null : state.viewMode || null,
+      schema: state.selectedSchema || null,
+      table: state.selectedTable || null,
+    });
+  }, [updateUrl]);
   
   // Diff comparison state
   const [compareDumpId, setCompareDumpId] = useState<string | null>(null);
@@ -522,7 +594,7 @@ export default function DumpDetailPage() {
             <div className="border-b border-slate-200 dark:border-slate-700">
               <nav className="flex gap-4 px-6">
                 <button
-                  onClick={() => setActiveTab('schema')}
+                  onClick={() => handleTabChange('schema')}
                   className={`py-4 px-2 font-medium text-sm border-b-2 transition-colors ${
                     activeTab === 'schema'
                       ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
@@ -532,7 +604,7 @@ export default function DumpDetailPage() {
                   📊 Schema Explorer
                 </button>
                 <button
-                  onClick={() => setActiveTab('search')}
+                  onClick={() => handleTabChange('search')}
                   className={`py-4 px-2 font-medium text-sm border-b-2 transition-colors ${
                     activeTab === 'search'
                       ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
@@ -542,7 +614,7 @@ export default function DumpDetailPage() {
                   🔍 Full-Text Search
                 </button>
                 <button
-                  onClick={() => setActiveTab('compare')}
+                  onClick={() => handleTabChange('compare')}
                   className={`py-4 px-2 font-medium text-sm border-b-2 transition-colors ${
                     activeTab === 'compare'
                       ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
@@ -557,10 +629,15 @@ export default function DumpDetailPage() {
             <div className="p-6">
               {activeTab === 'schema' ? (
                 <SchemaExplorer 
+                  key={`${currentViewMode}-${currentTable}-${currentSchema}`}
                   dumpId={dump.id}
                   schemaGraph={schema.schema_graph}
                   fullMermaidER={schema.mermaid_er}
                   selectedDatabase={selectedDb || undefined}
+                  initialViewMode={currentViewMode || undefined}
+                  initialSelectedSchema={currentSchema || undefined}
+                  initialSelectedTable={currentTable || undefined}
+                  onStateChange={handleSchemaExplorerStateChange}
                 />
               ) : activeTab === 'search' ? (
                 <SearchResults 

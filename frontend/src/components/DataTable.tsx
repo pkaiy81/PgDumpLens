@@ -49,6 +49,13 @@ export function DataTable({ dumpId, schema, table, database, columnRelations, on
   const [showSuggestions, setShowSuggestions] = useState(false);
   const [suggestLoading, setSuggestLoading] = useState(false);
 
+  // Transpose state
+  const [isTransposed, setIsTransposed] = useState(false);
+
+  // Copy state
+  const [copySuccess, setCopySuccess] = useState<string | null>(null);
+  const [showCopyMenu, setShowCopyMenu] = useState(false);
+
   // Fetch suggestions for a column
   const fetchSuggestions = useCallback(async (column: string, prefix: string) => {
     setSuggestLoading(true);
@@ -111,6 +118,93 @@ export function DataTable({ dumpId, schema, table, database, columnRelations, on
     setPage(0);
   };
 
+  // Helper function to copy text to clipboard with fallback
+  const copyToClipboard = useCallback(async (text: string): Promise<boolean> => {
+    // Try modern clipboard API first
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch (err) {
+        console.warn('Clipboard API failed, trying fallback:', err);
+      }
+    }
+    // Fallback for non-HTTPS or older browsers
+    try {
+      const textArea = document.createElement('textarea');
+      textArea.value = text;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-9999px';
+      textArea.style.top = '-9999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      const success = document.execCommand('copy');
+      document.body.removeChild(textArea);
+      return success;
+    } catch (err) {
+      console.error('Fallback copy failed:', err);
+      return false;
+    }
+  }, []);
+
+  // Copy data as CSV
+  const copyAsCSV = useCallback(async () => {
+    if (!data) return;
+    // Compute filtered rows inline
+    const rows = activeFilter?.value
+      ? data.rows.filter((row) => {
+          const cellValue = formatCellValue(row[activeFilter.column]);
+          return cellValue.toLowerCase().includes(activeFilter.value.toLowerCase());
+        })
+      : data.rows;
+    const header = data.columns.join(',');
+    const csvRows = rows.map(row => 
+      data.columns.map(col => {
+        const val = formatCellValue(row[col]);
+        // Escape quotes and wrap in quotes if contains comma or newline
+        if (val.includes(',') || val.includes('\n') || val.includes('"')) {
+          return `"${val.replace(/"/g, '""')}"`;
+        }
+        return val;
+      }).join(',')
+    );
+    const csv = [header, ...csvRows].join('\n');
+    const success = await copyToClipboard(csv);
+    if (success) {
+      setCopySuccess('CSV');
+      setTimeout(() => setCopySuccess(null), 2000);
+    }
+  }, [data, activeFilter, copyToClipboard]);
+
+  // Copy data as JSON
+  const copyAsJSON = useCallback(async () => {
+    if (!data) return;
+    // Compute filtered rows inline
+    const rows = activeFilter?.value
+      ? data.rows.filter((row) => {
+          const cellValue = formatCellValue(row[activeFilter.column]);
+          return cellValue.toLowerCase().includes(activeFilter.value.toLowerCase());
+        })
+      : data.rows;
+    const json = JSON.stringify(rows, null, 2);
+    const success = await copyToClipboard(json);
+    if (success) {
+      setCopySuccess('JSON');
+      setTimeout(() => setCopySuccess(null), 2000);
+    }
+  }, [data, activeFilter, copyToClipboard]);
+
+  // Copy single cell value
+  const copyCellValue = useCallback(async (value: unknown) => {
+    const text = formatCellValue(value);
+    const success = await copyToClipboard(text);
+    if (success) {
+      setCopySuccess('Cell');
+      setTimeout(() => setCopySuccess(null), 1500);
+    }
+  }, [copyToClipboard]);
+
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
@@ -171,132 +265,305 @@ export function DataTable({ dumpId, schema, table, database, columnRelations, on
 
   return (
     <div>
-      {/* Active Filter Badge */}
-      {activeFilter?.value && (
-        <div className="mb-3 flex items-center gap-2">
-          <span className="text-sm text-slate-600 dark:text-slate-400">Filtered by:</span>
-          <span className="inline-flex items-center gap-1 px-2 py-1 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 rounded-lg text-sm">
-            <span className="font-medium">{activeFilter.column}</span>
-            <span>=</span>
-            <span className="font-mono">&quot;{activeFilter.value}&quot;</span>
-            <button
-              onClick={clearFilter}
-              className="ml-1 hover:text-indigo-900 dark:hover:text-indigo-100"
-            >
-              ✕
-            </button>
-          </span>
-          <span className="text-sm text-slate-500">({filteredRows.length} matches)</span>
+      {/* Toolbar */}
+      <div className="mb-3 flex items-center justify-between flex-wrap gap-2">
+        <div className="flex items-center gap-2">
+          {/* Active Filter Badge */}
+          {activeFilter?.value && (
+            <span className="inline-flex items-center gap-1 px-2 py-1 bg-indigo-100 dark:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 rounded-lg text-sm">
+              <span className="font-medium">{activeFilter.column}</span>
+              <span>=</span>
+              <span className="font-mono">&quot;{activeFilter.value}&quot;</span>
+              <button
+                onClick={clearFilter}
+                className="ml-1 hover:text-indigo-900 dark:hover:text-indigo-100"
+              >
+                ✕
+              </button>
+              <span className="text-slate-500 ml-1">({filteredRows.length} matches)</span>
+            </span>
+          )}
         </div>
-      )}
 
-      <div className="overflow-x-auto">
-        <table className="data-table w-full text-sm">
-          <thead>
-            <tr className="border-b border-slate-200 dark:border-slate-700">
+        <div className="flex items-center gap-2">
+          {/* Copy success message */}
+          {copySuccess && (
+            <span className="text-sm text-green-600 dark:text-green-400 animate-pulse">
+              ✓ Copied as {copySuccess}
+            </span>
+          )}
+
+          {/* Transpose toggle */}
+          <button
+            onClick={() => setIsTransposed(!isTransposed)}
+            className={`px-3 py-1.5 text-sm rounded-lg border transition-colors flex items-center gap-1.5 ${
+              isTransposed
+                ? 'bg-indigo-100 dark:bg-indigo-900/50 border-indigo-300 dark:border-indigo-600 text-indigo-700 dark:text-indigo-300'
+                : 'bg-white dark:bg-slate-700 border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-600'
+            }`}
+            title="Toggle row/column transpose"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16V4m0 0L3 8m4-4l4 4m6 0v12m0 0l4-4m-4 4l-4-4" />
+            </svg>
+            Transpose
+          </button>
+
+          {/* Copy dropdown */}
+          <div className="relative">
+            <button
+              onClick={() => setShowCopyMenu(!showCopyMenu)}
+              onBlur={() => setTimeout(() => setShowCopyMenu(false), 150)}
+              className="px-3 py-1.5 text-sm rounded-lg border bg-white dark:bg-slate-700 border-slate-200 dark:border-slate-600 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-600 transition-colors flex items-center gap-1.5"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" />
+              </svg>
+              Copy
+              <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+              </svg>
+            </button>
+            {showCopyMenu && (
+              <div className="absolute right-0 mt-1 w-36 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-slate-200 dark:border-slate-600 z-50">
+                <button
+                  onMouseDown={(e) => { e.preventDefault(); copyAsCSV(); setShowCopyMenu(false); }}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 dark:hover:bg-slate-700 rounded-t-lg"
+                >
+                  📋 Copy as CSV
+                </button>
+                <button
+                  onMouseDown={(e) => { e.preventDefault(); copyAsJSON(); setShowCopyMenu(false); }}
+                  className="w-full text-left px-3 py-2 text-sm hover:bg-slate-100 dark:hover:bg-slate-700 rounded-b-lg"
+                >
+                  📋 Copy as JSON
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Transposed View */}
+      {isTransposed ? (
+        <div className="overflow-x-auto">
+          <table className="data-table w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 dark:border-slate-700">
+                <th className="text-left py-2 px-3 text-slate-500 dark:text-slate-400 font-medium whitespace-nowrap bg-slate-50 dark:bg-slate-800/50 min-w-[150px] sticky left-0">
+                  Column
+                </th>
+                {displayedRows.map((_, rowIdx) => (
+                  <th key={rowIdx} className="text-left py-2 px-3 text-slate-500 dark:text-slate-400 font-medium whitespace-nowrap">
+                    Row {page * pageSize + rowIdx + 1}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
               {data.columns.map((col) => {
                 const relInfo = columnRelations?.[col];
                 const hasRelations = relInfo?.hasOutbound || relInfo?.hasInbound;
                 
                 return (
-                <th key={col} className="relative text-left py-2 px-3 text-slate-500 dark:text-slate-400 font-medium whitespace-nowrap">
-                  <div className="flex items-center gap-1">
-                    {/* Relation indicators */}
-                    {relInfo?.hasInbound && (
-                      <span 
-                        className="text-blue-500 dark:text-blue-400" 
-                        title={`Referenced by: ${relInfo.inboundTables.join(', ')}`}
-                      >
-                        ⬅️
-                      </span>
-                    )}
-                    {relInfo?.hasOutbound && (
-                      <span 
-                        className="text-purple-500 dark:text-purple-400" 
-                        title={`References: ${relInfo.outboundTables.join(', ')}`}
-                      >
-                        🔗
-                      </span>
-                    )}
-                    <span className={hasRelations ? 'font-semibold text-slate-700 dark:text-slate-200' : ''}>{col}</span>
-                    <button
-                      onClick={() => handleFilterClick(col)}
-                      className={`p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 ${
-                        activeFilter?.column === col ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'
-                      }`}
-                      title={`Filter by ${col}`}
-                    >
-                      🔍
-                    </button>
-                  </div>
-                  {/* Filter dropdown */}
-                  {activeFilter?.column === col && showSuggestions && (
-                    <div className="absolute z-50 mt-1 w-64 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-slate-200 dark:border-slate-600">
-                      <div className="p-2">
-                        <input
-                          type="text"
-                          value={filterInput}
-                          onChange={(e) => handleFilterInputChange(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter' && filterInput) {
-                              applyFilter(filterInput);
-                            } else if (e.key === 'Escape') {
-                              setShowSuggestions(false);
-                            }
-                          }}
-                          placeholder={`Filter ${col}...`}
-                          className="w-full px-2 py-1 text-sm border border-slate-200 dark:border-slate-600 rounded bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
-                          autoFocus
-                        />
-                      </div>
-                      <div className="max-h-48 overflow-y-auto border-t border-slate-200 dark:border-slate-600">
-                        {suggestLoading ? (
-                          <div className="p-2 text-center text-slate-500 text-sm">Loading...</div>
-                        ) : suggestions.length > 0 ? (
-                          <>
-                            <div className="px-2 py-1 text-xs text-slate-400 bg-slate-50 dark:bg-slate-700/50">
-                              Top values
-                            </div>
-                            {suggestions.map((s, i) => (
-                              <button
-                                key={i}
-                                onClick={() => applyFilter(formatCellValue(s.value))}
-                                className="w-full text-left px-3 py-1.5 text-sm hover:bg-slate-100 dark:hover:bg-slate-700 flex justify-between items-center"
-                              >
-                                <span className="font-mono truncate">{formatCellValue(s.value)}</span>
-                                <span className="text-xs text-slate-400 ml-2">({s.frequency})</span>
-                              </button>
-                            ))}
-                          </>
-                        ) : (
-                          <div className="p-2 text-center text-slate-500 text-sm">Type to search</div>
+                  <tr key={col} className="border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                    <th className="relative text-left py-2 px-3 text-slate-500 dark:text-slate-400 font-medium whitespace-nowrap bg-slate-50 dark:bg-slate-800/50 min-w-[150px] sticky left-0">
+                      <div className="flex items-center gap-1">
+                        {relInfo?.hasInbound && (
+                          <span className="text-blue-500 dark:text-blue-400" title={`Referenced by: ${relInfo.inboundTables.join(', ')}`}>⬅️</span>
                         )}
+                        {relInfo?.hasOutbound && (
+                          <span className="text-purple-500 dark:text-purple-400" title={`References: ${relInfo.outboundTables.join(', ')}`}>🔗</span>
+                        )}
+                        <span className={hasRelations ? 'font-semibold text-slate-700 dark:text-slate-200' : ''}>{col}</span>
+                        <button
+                          onClick={() => handleFilterClick(col)}
+                          className={`p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 ${activeFilter?.column === col ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'}`}
+                          title={`Filter by ${col}`}
+                        >
+                          🔍
+                        </button>
                       </div>
-                    </div>
-                  )}
-                </th>
-              );
+                      {/* Filter dropdown */}
+                      {activeFilter?.column === col && showSuggestions && (
+                        <div className="absolute z-50 mt-1 left-0 w-64 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-slate-200 dark:border-slate-600">
+                          <div className="p-2">
+                            <input
+                              type="text"
+                              value={filterInput}
+                              onChange={(e) => handleFilterInputChange(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' && filterInput) {
+                                  applyFilter(filterInput);
+                                } else if (e.key === 'Escape') {
+                                  setShowSuggestions(false);
+                                }
+                              }}
+                              placeholder={`Filter ${col}...`}
+                              className="w-full px-2 py-1 text-sm border border-slate-200 dark:border-slate-600 rounded bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
+                              autoFocus
+                            />
+                          </div>
+                          <div className="max-h-48 overflow-y-auto border-t border-slate-200 dark:border-slate-600">
+                            {suggestLoading ? (
+                              <div className="p-2 text-center text-slate-500 text-sm">Loading...</div>
+                            ) : suggestions.length > 0 ? (
+                              <>
+                                <div className="px-2 py-1 text-xs text-slate-400 bg-slate-50 dark:bg-slate-700/50">
+                                  Top values
+                                </div>
+                                {suggestions.map((s, i) => (
+                                  <button
+                                    key={i}
+                                    onClick={() => applyFilter(formatCellValue(s.value))}
+                                    className="w-full text-left px-3 py-1.5 text-sm hover:bg-slate-100 dark:hover:bg-slate-700 flex justify-between items-center"
+                                  >
+                                    <span className="font-mono truncate">{formatCellValue(s.value)}</span>
+                                    <span className="text-xs text-slate-400 ml-2">({s.frequency})</span>
+                                  </button>
+                                ))}
+                              </>
+                            ) : (
+                              <div className="p-2 text-center text-slate-500 text-sm">Type to search</div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </th>
+                    {displayedRows.map((row, rowIdx) => (
+                      <td
+                        key={rowIdx}
+                        onClick={() => onCellClick?.(col, row[col], row)}
+                        onDoubleClick={() => copyCellValue(row[col])}
+                        className="py-2 px-3 font-mono text-xs cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/30 whitespace-nowrap max-w-xs truncate"
+                        title={`${formatCellValue(row[col])}\n\nDouble-click to copy`}
+                      >
+                        {formatCellValue(row[col])}
+                      </td>
+                    ))}
+                  </tr>
+                );
               })}
-            </tr>
-          </thead>
-          <tbody>
-            {displayedRows.map((row, rowIdx) => (
-              <tr key={rowIdx} className="border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                {data.columns.map((col) => (
-                  <td
-                    key={col}
-                    onClick={() => onCellClick?.(col, row[col], row)}
-                    className="py-2 px-3 font-mono text-xs cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/30 whitespace-nowrap max-w-xs truncate"
-                    title={formatCellValue(row[col])}
-                  >
-                    {formatCellValue(row[col])}
-                  </td>
-                ))}
+            </tbody>
+          </table>
+          <p className="text-xs text-slate-400 dark:text-slate-500 mt-2 text-center">
+            💡 Double-click a cell to copy its value
+          </p>
+        </div>
+      ) : (
+        /* Normal Table View */
+        <div className="overflow-x-auto">
+          <table className="data-table w-full text-sm">
+            <thead>
+              <tr className="border-b border-slate-200 dark:border-slate-700">
+                {data.columns.map((col) => {
+                  const relInfo = columnRelations?.[col];
+                  const hasRelations = relInfo?.hasOutbound || relInfo?.hasInbound;
+                  
+                  return (
+                  <th key={col} className="relative text-left py-2 px-3 text-slate-500 dark:text-slate-400 font-medium whitespace-nowrap">
+                    <div className="flex items-center gap-1">
+                      {/* Relation indicators */}
+                      {relInfo?.hasInbound && (
+                        <span 
+                          className="text-blue-500 dark:text-blue-400" 
+                          title={`Referenced by: ${relInfo.inboundTables.join(', ')}`}
+                        >
+                          ⬅️
+                        </span>
+                      )}
+                      {relInfo?.hasOutbound && (
+                        <span 
+                          className="text-purple-500 dark:text-purple-400" 
+                          title={`References: ${relInfo.outboundTables.join(', ')}`}
+                        >
+                          🔗
+                        </span>
+                      )}
+                      <span className={hasRelations ? 'font-semibold text-slate-700 dark:text-slate-200' : ''}>{col}</span>
+                      <button
+                        onClick={() => handleFilterClick(col)}
+                        className={`p-0.5 rounded hover:bg-slate-200 dark:hover:bg-slate-600 ${
+                          activeFilter?.column === col ? 'text-indigo-600 dark:text-indigo-400' : 'text-slate-400'
+                        }`}
+                        title={`Filter by ${col}`}
+                      >
+                        🔍
+                      </button>
+                    </div>
+                    {/* Filter dropdown */}
+                    {activeFilter?.column === col && showSuggestions && (
+                      <div className="absolute z-50 mt-1 w-64 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-slate-200 dark:border-slate-600">
+                        <div className="p-2">
+                          <input
+                            type="text"
+                            value={filterInput}
+                            onChange={(e) => handleFilterInputChange(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter' && filterInput) {
+                                applyFilter(filterInput);
+                              } else if (e.key === 'Escape') {
+                                setShowSuggestions(false);
+                              }
+                            }}
+                            placeholder={`Filter ${col}...`}
+                            className="w-full px-2 py-1 text-sm border border-slate-200 dark:border-slate-600 rounded bg-white dark:bg-slate-700 text-slate-900 dark:text-white"
+                            autoFocus
+                          />
+                        </div>
+                        <div className="max-h-48 overflow-y-auto border-t border-slate-200 dark:border-slate-600">
+                          {suggestLoading ? (
+                            <div className="p-2 text-center text-slate-500 text-sm">Loading...</div>
+                          ) : suggestions.length > 0 ? (
+                            <>
+                              <div className="px-2 py-1 text-xs text-slate-400 bg-slate-50 dark:bg-slate-700/50">
+                                Top values
+                              </div>
+                              {suggestions.map((s, i) => (
+                                <button
+                                  key={i}
+                                  onClick={() => applyFilter(formatCellValue(s.value))}
+                                  className="w-full text-left px-3 py-1.5 text-sm hover:bg-slate-100 dark:hover:bg-slate-700 flex justify-between items-center"
+                                >
+                                  <span className="font-mono truncate">{formatCellValue(s.value)}</span>
+                                  <span className="text-xs text-slate-400 ml-2">({s.frequency})</span>
+                                </button>
+                              ))}
+                            </>
+                          ) : (
+                            <div className="p-2 text-center text-slate-500 text-sm">Type to search</div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </th>
+                );
+                })}
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+            </thead>
+            <tbody>
+              {displayedRows.map((row, rowIdx) => (
+                <tr key={rowIdx} className="border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                  {data.columns.map((col) => (
+                    <td
+                      key={col}
+                      onClick={() => onCellClick?.(col, row[col], row)}
+                      onDoubleClick={() => copyCellValue(row[col])}
+                      className="py-2 px-3 font-mono text-xs cursor-pointer hover:bg-indigo-50 dark:hover:bg-indigo-900/30 whitespace-nowrap max-w-xs truncate"
+                      title={`${formatCellValue(row[col])}\n\nDouble-click to copy`}
+                    >
+                      {formatCellValue(row[col])}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <p className="text-xs text-slate-400 dark:text-slate-500 mt-2 text-center">
+            💡 Double-click a cell to copy its value
+          </p>
+        </div>
+      )}
       
       {/* Pagination */}
       {totalPages > 1 && (
