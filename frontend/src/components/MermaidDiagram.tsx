@@ -79,21 +79,65 @@ export function MermaidDiagram({ chart, className = '', onExportSvg }: MermaidDi
       // Clone the SVG to avoid modifying the original
       const clonedSvg = svgEl.cloneNode(true) as SVGElement;
       
-      // Ensure SVG has proper dimensions
-      const bbox = svgEl.getBBox();
-      const width = Math.ceil(bbox.width + 40);
-      const height = Math.ceil(bbox.height + 40);
+      // Get intrinsic dimensions from the original SVG attributes or viewBox
+      // This ensures we capture the full diagram regardless of current zoom/pan
+      let width: number;
+      let height: number;
+      let viewBoxX = 0;
+      let viewBoxY = 0;
       
-      clonedSvg.setAttribute('width', String(width));
-      clonedSvg.setAttribute('height', String(height));
-      clonedSvg.setAttribute('viewBox', `${bbox.x - 20} ${bbox.y - 20} ${width} ${height}`);
+      const viewBoxAttr = svgEl.getAttribute('viewBox');
+      const widthAttr = svgEl.getAttribute('width');
+      const heightAttr = svgEl.getAttribute('height');
+      
+      if (viewBoxAttr) {
+        // Parse viewBox to get full diagram dimensions
+        const parts = viewBoxAttr.split(/[\s,]+/).map(Number);
+        if (parts.length === 4) {
+          viewBoxX = parts[0];
+          viewBoxY = parts[1];
+          width = parts[2];
+          height = parts[3];
+        } else {
+          // Fallback to getBBox
+          const bbox = svgEl.getBBox();
+          viewBoxX = bbox.x;
+          viewBoxY = bbox.y;
+          width = bbox.width;
+          height = bbox.height;
+        }
+      } else if (widthAttr && heightAttr) {
+        // Use explicit width/height attributes
+        width = parseFloat(widthAttr) || 800;
+        height = parseFloat(heightAttr) || 600;
+      } else {
+        // Fallback to getBBox for content bounds
+        const bbox = svgEl.getBBox();
+        viewBoxX = bbox.x;
+        viewBoxY = bbox.y;
+        width = bbox.width;
+        height = bbox.height;
+      }
+      
+      // Add padding
+      const padding = 40;
+      const totalWidth = Math.ceil(width + padding);
+      const totalHeight = Math.ceil(height + padding);
+      
+      // Set proper dimensions on cloned SVG
+      clonedSvg.setAttribute('width', String(totalWidth));
+      clonedSvg.setAttribute('height', String(totalHeight));
+      clonedSvg.setAttribute('viewBox', `${viewBoxX - padding/2} ${viewBoxY - padding/2} ${totalWidth} ${totalHeight}`);
+      
+      // Remove any transform that might have been applied for zoom/pan
+      clonedSvg.style.transform = '';
       
       // Add white background
       const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
-      bgRect.setAttribute('x', String(bbox.x - 20));
-      bgRect.setAttribute('y', String(bbox.y - 20));
-      bgRect.setAttribute('width', String(width));
-      bgRect.setAttribute('height', String(height));
+      bgRect.setAttribute('x', String(viewBoxX - padding/2));
+      bgRect.setAttribute('y', String(viewBoxY - padding/2));
+      bgRect.setAttribute('width', String(totalWidth));
+      bgRect.setAttribute('height', String(totalHeight));
       bgRect.setAttribute('fill', 'white');
       clonedSvg.insertBefore(bgRect, clonedSvg.firstChild);
       
@@ -108,9 +152,9 @@ export function MermaidDiagram({ chart, className = '', onExportSvg }: MermaidDi
       
       // Create canvas with 2x scale for better quality
       const canvas = document.createElement('canvas');
-      const scale = 2;
-      canvas.width = width * scale;
-      canvas.height = height * scale;
+      const canvasScale = 2;
+      canvas.width = totalWidth * canvasScale;
+      canvas.height = totalHeight * canvasScale;
       
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
@@ -118,7 +162,7 @@ export function MermaidDiagram({ chart, className = '', onExportSvg }: MermaidDi
       // Fill with white background
       ctx.fillStyle = 'white';
       ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.scale(scale, scale);
+      ctx.scale(canvasScale, canvasScale);
       
       // Create image from SVG using data URL
       const svgBlob = new Blob([svgString], { type: 'image/svg+xml;charset=utf-8' });

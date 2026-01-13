@@ -158,24 +158,44 @@ export function DataTable({ dumpId, schema, table, database, columnRelations, on
           return cellValue.toLowerCase().includes(activeFilter.value.toLowerCase());
         })
       : data.rows;
-    const header = data.columns.join(',');
-    const csvRows = rows.map(row => 
-      data.columns.map(col => {
-        const val = formatCellValue(row[col]);
-        // Escape quotes and wrap in quotes if contains comma or newline
-        if (val.includes(',') || val.includes('\n') || val.includes('"')) {
-          return `"${val.replace(/"/g, '""')}"`;
-        }
-        return val;
-      }).join(',')
-    );
-    const csv = [header, ...csvRows].join('\n');
+    
+    let csv: string;
+    if (isTransposed) {
+      // Transposed: columns become rows, each row becomes a column
+      // Header is "Column" followed by row indices (or "Row 1", "Row 2", etc.)
+      const header = ['Column', ...rows.map((_, i) => `Row ${i + 1}`)].join(',');
+      const csvRows = data.columns.map(col => {
+        const values = rows.map(row => {
+          const val = formatCellValue(row[col]);
+          if (val.includes(',') || val.includes('\n') || val.includes('"')) {
+            return `"${val.replace(/"/g, '""')}"`;
+          }
+          return val;
+        });
+        return [col, ...values].join(',');
+      });
+      csv = [header, ...csvRows].join('\n');
+    } else {
+      // Normal: standard row-based CSV
+      const header = data.columns.join(',');
+      const csvRows = rows.map(row => 
+        data.columns.map(col => {
+          const val = formatCellValue(row[col]);
+          // Escape quotes and wrap in quotes if contains comma or newline
+          if (val.includes(',') || val.includes('\n') || val.includes('"')) {
+            return `"${val.replace(/"/g, '""')}"`;
+          }
+          return val;
+        }).join(',')
+      );
+      csv = [header, ...csvRows].join('\n');
+    }
     const success = await copyToClipboard(csv);
     if (success) {
       setCopySuccess('CSV');
       setTimeout(() => setCopySuccess(null), 2000);
     }
-  }, [data, activeFilter, copyToClipboard]);
+  }, [data, activeFilter, copyToClipboard, isTransposed]);
 
   // Copy data as JSON
   const copyAsJSON = useCallback(async () => {
@@ -187,13 +207,25 @@ export function DataTable({ dumpId, schema, table, database, columnRelations, on
           return cellValue.toLowerCase().includes(activeFilter.value.toLowerCase());
         })
       : data.rows;
-    const json = JSON.stringify(rows, null, 2);
+    
+    let jsonData: unknown;
+    if (isTransposed) {
+      // Transposed: structure as { column: [row1val, row2val, ...] }
+      jsonData = data.columns.reduce((acc, col) => {
+        acc[col] = rows.map(row => row[col]);
+        return acc;
+      }, {} as Record<string, unknown[]>);
+    } else {
+      // Normal: array of row objects
+      jsonData = rows;
+    }
+    const json = JSON.stringify(jsonData, null, 2);
     const success = await copyToClipboard(json);
     if (success) {
       setCopySuccess('JSON');
       setTimeout(() => setCopySuccess(null), 2000);
     }
-  }, [data, activeFilter, copyToClipboard]);
+  }, [data, activeFilter, copyToClipboard, isTransposed]);
 
   // Copy single cell value
   const copyCellValue = useCallback(async (value: unknown) => {

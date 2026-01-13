@@ -33,7 +33,7 @@ export default function RootLayout({
                       PgDumpLens
                     </span>
                     <span className="text-xs text-slate-400 dark:text-slate-500 font-medium">
-                      v0.1.0
+                      v1.0.0
                     </span>
                   </div>
                 </Link>
