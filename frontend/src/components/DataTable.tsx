@@ -478,9 +478,6 @@ export function DataTable({ dumpId, schema, table, database, columnRelations, on
               })}
             </tbody>
           </table>
-          <p className="text-xs text-slate-400 dark:text-slate-500 mt-2 text-center">
-            💡 Double-click a cell to copy its value
-          </p>
         </div>
       ) : (
         /* Normal Table View */
@@ -591,9 +588,6 @@ export function DataTable({ dumpId, schema, table, database, columnRelations, on
               ))}
             </tbody>
           </table>
-          <p className="text-xs text-slate-400 dark:text-slate-500 mt-2 text-center">
-            💡 Double-click a cell to copy its value
-          </p>
         </div>
       )}
       

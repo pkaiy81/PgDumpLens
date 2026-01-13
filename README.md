@@ -8,7 +8,7 @@
 
 PostgreSQL のダンプファイルをアップロードし、データベース構造を可視化・分析するWebアプリケーション。
 
-**[English](#english) | 日本語**
+**[English](README_EM.md) | 日本語**
 
 ## 📋 機能
 
@@ -734,54 +734,6 @@ users.id = 123 をクリック
 ```
 
 このリスク評価により、データベース操作の影響範囲を事前に把握し、安全なデータ管理を実現します。
-
----
-
-## English
-
-### Features
-
-- **Dump Upload**: Upload dump files created with `pg_dump` / `pg_dumpall`
-- **Multi-Database Support**: View and switch between multiple databases in `pg_dumpall` format
-- **ER Diagram Generation**: Automatically visualize table relationships with Mermaid.js
-- **Data Browsing**: Browse table data in your browser with pagination
-- **Value Filtering**: Filter by column values with frequent value suggestions
-- **Relationship Explorer**: Click cells to view related tables, JOIN paths, and sample SQL
-- **Impact Risk Assessment**: Score the impact of data changes (considering CASCADE dependencies)
-- **Dump Diff Comparison**: Visualize schema and data differences between two dumps
-  - Schema diff: tables/columns/foreign keys additions, deletions, modifications
-  - Data diff: Auto-detect data changes via MD5 checksums
-  - Per-table data comparison with row-level diff view
-- **Dark Mode Support**: Full dark mode support for all UI components
-- **TTL Auto-Deletion**: Automatic cleanup of dumps after a specified time
-
-### Quick Start
-
-```bash
-# Clone the repository
-git clone https://github.com/pkaiy81/pgdumplens.git
-cd pgdumplens
-
-# Start with Docker Compose
-docker compose up -d
-
-# Access the application
-open http://localhost:3000
-```
-
-### Supported Formats
-
-| Format    | Extension             | Description                |
-| --------- | --------------------- | -------------------------- |
-| Plain SQL | `.sql`                | Created with `pg_dump -Fp` |
-| Custom    | `.dump`, `.backup`    | Created with `pg_dump -Fc` |
-| Gzip      | `.sql.gz`, `.dump.gz` | Gzip compressed versions   |
-
-### PostgreSQL Version Support
-
-- **Dump files**: PostgreSQL 9.6 - 17.x
-- **Recommended**: PostgreSQL 12+ for full feature support
-- **Internal databases**: PostgreSQL 16.x (Alpine)
 
 ---
 
