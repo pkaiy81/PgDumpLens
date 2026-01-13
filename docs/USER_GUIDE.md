@@ -976,14 +976,4 @@ usersテーブル → ordersテーブル → [戻る] → usersテーブルに�
 
 ---
 
-## 📞 サポート
-
-質問や問題がある場合:
-
-- 📧 Email: <support@example.com>
-- 💬 GitHub Issues: <https://github.com/your-username/pgdumplens/issues>
-- 📖 Docs: <https://pgdumplens.example.com/docs>
-
----
-
 **Happy Database Analyzing! 🚀**
