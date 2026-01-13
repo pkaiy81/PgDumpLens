@@ -150,11 +150,39 @@ export function MermaidDiagram({ chart, className = '', onExportSvg }: MermaidDi
         svgString = svgString.replace('<svg', '<svg xmlns="http://www.w3.org/2000/svg"');
       }
       
-      // Create canvas with 2x scale for better quality
+      // Calculate optimal scale based on canvas size limits
+      // Most browsers limit canvas to ~16384x16384 or ~268 megapixels
+      const MAX_CANVAS_SIZE = 16384;
+      const MAX_CANVAS_AREA = 268435456; // 256 megapixels to be safe
+      
+      let canvasScale = 2; // Default 2x for high quality
+      
+      // Check if dimensions exceed limits and reduce scale if needed
+      let canvasWidth = totalWidth * canvasScale;
+      let canvasHeight = totalHeight * canvasScale;
+      
+      // Reduce scale if dimensions exceed max size
+      if (canvasWidth > MAX_CANVAS_SIZE || canvasHeight > MAX_CANVAS_SIZE) {
+        const scaleByWidth = MAX_CANVAS_SIZE / totalWidth;
+        const scaleByHeight = MAX_CANVAS_SIZE / totalHeight;
+        canvasScale = Math.min(scaleByWidth, scaleByHeight, canvasScale);
+      }
+      
+      // Reduce scale if total area exceeds limit
+      canvasWidth = totalWidth * canvasScale;
+      canvasHeight = totalHeight * canvasScale;
+      if (canvasWidth * canvasHeight > MAX_CANVAS_AREA) {
+        const areaScale = Math.sqrt(MAX_CANVAS_AREA / (totalWidth * totalHeight));
+        canvasScale = Math.min(canvasScale, areaScale);
+      }
+      
+      // Ensure minimum scale of 1
+      canvasScale = Math.max(1, canvasScale);
+      
+      // Create canvas with calculated scale
       const canvas = document.createElement('canvas');
-      const canvasScale = 2;
-      canvas.width = totalWidth * canvasScale;
-      canvas.height = totalHeight * canvasScale;
+      canvas.width = Math.floor(totalWidth * canvasScale);
+      canvas.height = Math.floor(totalHeight * canvasScale);
       
       const ctx = canvas.getContext('2d');
       if (!ctx) return;
