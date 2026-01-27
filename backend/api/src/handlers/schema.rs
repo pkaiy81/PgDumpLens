@@ -420,9 +420,9 @@ pub async fn suggest_values(
         )
     };
 
-    let rows = if query.prefix.is_some() {
+    let rows = if let Some(prefix) = &query.prefix {
         sqlx::query(&suggest_query)
-            .bind(format!("{}%", query.prefix.as_ref().unwrap()))
+            .bind(format!("{}%", prefix))
             .fetch_all(&sandbox_pool)
             .await?
     } else {
