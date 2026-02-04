@@ -301,6 +301,497 @@ impl PostgresAdapter {
         );
         Ok((rewritten_path, databases))
     }
+
+    /// Extract table names from a dump file without restoring it
+    /// Returns a list of (schema_name, table_name, estimated_size_bytes) tuples
+    pub fn extract_tables_from_dump(&self, dump_path: &str) -> Result<Vec<TablePreview>> {
+        let path = Path::new(dump_path);
+
+        // Handle gzip compression
+        let actual_path = if dump_path.ends_with(".gz") {
+            // Need to decompress first
+            let file = File::open(path)
+                .map_err(|e| CoreError::Internal(format!("Failed to open dump file: {}", e)))?;
+            let mut reader = BufReader::new(file);
+            let mut magic = [0u8; 2];
+            if reader.read_exact(&mut magic).is_ok() && magic == GZIP_MAGIC {
+                let decompressed_path = format!("{}.preview", dump_path);
+                let file = File::open(path)
+                    .map_err(|e| CoreError::Internal(format!("Failed to open dump file: {}", e)))?;
+                let mut decoder = GzDecoder::new(file);
+                let mut output_file = File::create(&decompressed_path).map_err(|e| {
+                    CoreError::Internal(format!("Failed to create temp file: {}", e))
+                })?;
+                std::io::copy(&mut decoder, &mut output_file)
+                    .map_err(|e| CoreError::Internal(format!("Failed to decompress: {}", e)))?;
+                decompressed_path
+            } else {
+                dump_path.to_string()
+            }
+        } else {
+            dump_path.to_string()
+        };
+
+        // Check if custom format
+        let is_custom = self.detect_pg_dump_format(&actual_path)?;
+
+        if is_custom {
+            self.extract_tables_from_custom_format(&actual_path)
+        } else {
+            self.extract_tables_from_sql(&actual_path)
+        }
+    }
+
+    /// Extract tables from pg_dump custom format using pg_restore -l
+    fn extract_tables_from_custom_format(&self, dump_path: &str) -> Result<Vec<TablePreview>> {
+        let mut cmd = Command::new("pg_restore");
+        cmd.args(["-l", dump_path]);
+
+        let output = cmd
+            .output()
+            .map_err(|e| CoreError::Internal(format!("Failed to execute pg_restore -l: {}", e)))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(CoreError::Internal(format!(
+                "pg_restore -l failed: {}",
+                stderr
+            )));
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut tables = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        // Parse pg_restore -l output
+        // Format: "idx; seq schema table_name owner type description"
+        // Example: "3432; 0 0 TABLE public users admin"
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.starts_with(';') || line.is_empty() {
+                continue;
+            }
+
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 6 && parts[3] == "TABLE" {
+                let schema = parts[4].to_string();
+                let table = parts[5].to_string();
+                let key = format!("{}.{}", schema, table);
+                if !seen.contains(&key) {
+                    seen.insert(key);
+                    tables.push(TablePreview {
+                        schema_name: schema,
+                        table_name: table,
+                        estimated_size_bytes: None,
+                        row_count_hint: None,
+                        dependent_tables: Vec::new(),
+                    });
+                }
+            }
+        }
+
+        Ok(tables)
+    }
+
+    /// Extract tables from plain SQL dump by parsing CREATE TABLE statements
+    fn extract_tables_from_sql(&self, dump_path: &str) -> Result<Vec<TablePreview>> {
+        use regex::Regex;
+        use std::io::BufRead;
+
+        let file = File::open(dump_path)
+            .map_err(|e| CoreError::Internal(format!("Failed to open dump file: {}", e)))?;
+        let reader = BufReader::new(file);
+
+        let mut tables = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+
+        // Track FK relationships: target_table -> [source_tables]
+        // When target_table data is excluded, source_tables will have FK violations
+        let mut fk_dependencies: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+
+        // Match CREATE TABLE statements
+        // Patterns:
+        //   CREATE TABLE schema.table_name
+        //   CREATE TABLE "schema"."table_name"
+        //   CREATE TABLE table_name (schema will be public)
+        let create_table_re = Regex::new(
+            r#"(?i)CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(?:"?([a-zA-Z_][a-zA-Z0-9_]*)"?\.)?"?([a-zA-Z_][a-zA-Z0-9_]*)"?\s*\("#
+        ).map_err(|e| CoreError::Internal(format!("Regex error: {}", e)))?;
+
+        // Also match COPY statements to detect tables with data
+        let copy_re = Regex::new(
+            r#"(?i)COPY\s+(?:"?([a-zA-Z_][a-zA-Z0-9_]*)"?\.)?"?([a-zA-Z_][a-zA-Z0-9_]*)"?\s*(?:\(|FROM)"#
+        ).map_err(|e| CoreError::Internal(format!("Regex error: {}", e)))?;
+
+        // Match ALTER TABLE ... ADD CONSTRAINT ... FOREIGN KEY ... REFERENCES target_table
+        // Pattern: ALTER TABLE source_table ADD CONSTRAINT ... FOREIGN KEY ... REFERENCES target_table
+        let fk_alter_re = Regex::new(
+            r#"(?i)ALTER\s+TABLE\s+(?:ONLY\s+)?(?:"?([a-zA-Z_][a-zA-Z0-9_]*)"?\.)?"?([a-zA-Z_][a-zA-Z0-9_]*)"?\s+ADD\s+CONSTRAINT\s+[^\s]+\s+FOREIGN\s+KEY\s*\([^)]+\)\s*REFERENCES\s+(?:"?([a-zA-Z_][a-zA-Z0-9_]*)"?\.)?"?([a-zA-Z_][a-zA-Z0-9_]*)"?"#
+        ).map_err(|e| CoreError::Internal(format!("Regex error: {}", e)))?;
+
+        // Match inline REFERENCES in CREATE TABLE
+        // Pattern: column_name TYPE REFERENCES target_table(column)
+        let fk_inline_re = Regex::new(
+            r#"(?i)\s+REFERENCES\s+(?:"?([a-zA-Z_][a-zA-Z0-9_]*)"?\.)?"?([a-zA-Z_][a-zA-Z0-9_]*)"?\s*\("#
+        ).map_err(|e| CoreError::Internal(format!("Regex error: {}", e)))?;
+
+        // Match INSERT INTO statements
+        // Pattern: INSERT INTO schema.table_name ... VALUES
+        let insert_re = Regex::new(
+            r#"(?i)INSERT\s+INTO\s+(?:"?([a-zA-Z_][a-zA-Z0-9_]*)"?\.)?"?([a-zA-Z_][a-zA-Z0-9_]*)"?\s*\("#
+        ).map_err(|e| CoreError::Internal(format!("Regex error: {}", e)))?;
+
+        // Track tables with data (from COPY and INSERT statements) to estimate size
+        let mut tables_with_data: std::collections::HashMap<String, usize> =
+            std::collections::HashMap::new();
+        let mut current_copy_table: Option<String> = None;
+        let mut copy_line_count = 0;
+
+        // Track current INSERT INTO for multi-line INSERT statements
+        let mut current_insert_table: Option<String> = None;
+
+        // Track current CREATE TABLE context
+        let mut current_create_table: Option<(String, String)> = None; // (schema, table)
+
+        for line in reader.lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+
+            // Check for end of COPY data
+            if current_copy_table.is_some() && line == "\\." {
+                if let Some(ref table_key) = current_copy_table {
+                    tables_with_data.insert(table_key.clone(), copy_line_count);
+                }
+                current_copy_table = None;
+                copy_line_count = 0;
+                continue;
+            }
+
+            // Count lines in COPY data
+            if current_copy_table.is_some() {
+                copy_line_count += 1;
+                continue;
+            }
+
+            // Match CREATE TABLE
+            if let Some(caps) = create_table_re.captures(&line) {
+                let schema = caps
+                    .get(1)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_else(|| "public".to_string());
+                let table = caps
+                    .get(2)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default();
+
+                if !table.is_empty() {
+                    let key = format!("{}.{}", schema, table);
+                    if !seen.contains(&key) {
+                        seen.insert(key);
+                        tables.push(TablePreview {
+                            schema_name: schema.clone(),
+                            table_name: table.clone(),
+                            estimated_size_bytes: None,
+                            row_count_hint: None,
+                            dependent_tables: Vec::new(),
+                        });
+                    }
+                    // Track current CREATE TABLE for inline REFERENCES
+                    current_create_table = Some((schema, table));
+                }
+            }
+
+            // Detect end of CREATE TABLE (closing parenthesis with semicolon)
+            if current_create_table.is_some() && line.contains(");") {
+                current_create_table = None;
+            }
+
+            // Match COPY statement start
+            if let Some(caps) = copy_re.captures(&line) {
+                let schema = caps
+                    .get(1)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_else(|| "public".to_string());
+                let table = caps
+                    .get(2)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default();
+
+                if !table.is_empty() && line.contains("FROM stdin") {
+                    current_copy_table = Some(format!("{}.{}", schema, table));
+                    copy_line_count = 0;
+                }
+            }
+
+            // Match INSERT INTO statements to count rows
+            // INSERT INTO table (...) VALUES (...), (...), ...;
+            // Handle multi-line INSERT statements
+            if let Some(caps) = insert_re.captures(&line) {
+                let schema = caps
+                    .get(1)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_else(|| "public".to_string());
+                let table = caps
+                    .get(2)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default();
+
+                if !table.is_empty() {
+                    let table_key = format!("{}.{}", schema, table);
+                    // Check if VALUES is on this line
+                    if let Some(values_pos) = line.to_uppercase().find("VALUES") {
+                        let values_part = &line[values_pos..];
+                        // Count opening parentheses after VALUES (each represents a row)
+                        let row_count = values_part.matches('(').count();
+                        *tables_with_data.entry(table_key.clone()).or_insert(0) += row_count;
+                    }
+                    // If line ends without semicolon, more data follows
+                    if !line.trim_end().ends_with(';') {
+                        current_insert_table = Some(table_key);
+                    }
+                }
+            }
+
+            // Continue counting rows for multi-line INSERT statements
+            if let Some(ref table_key) = current_insert_table {
+                // Skip if this line matches INSERT (already processed above)
+                if !line.to_uppercase().contains("INSERT INTO") {
+                    // Count opening parentheses that start a value tuple
+                    // Look for patterns like "(...)" which represent rows
+                    let row_count = line.matches("('").count()
+                        + line.matches("(NULL").count()
+                        + line.matches("(DEFAULT").count();
+                    // If no specific pattern found, count '(' at start of potential tuples
+                    let row_count = if row_count == 0 {
+                        // Count lines that look like value tuples (start with '(' after optional whitespace)
+                        if line.trim_start().starts_with('(') {
+                            1
+                        } else {
+                            0
+                        }
+                    } else {
+                        row_count
+                    };
+                    *tables_with_data.entry(table_key.clone()).or_insert(0) += row_count;
+                }
+                // Check if INSERT statement ends
+                if line.trim_end().ends_with(';') {
+                    current_insert_table = None;
+                }
+            }
+
+            // Match inline REFERENCES within CREATE TABLE
+            if let Some((ref source_schema, ref source_table)) = current_create_table {
+                if let Some(caps) = fk_inline_re.captures(&line) {
+                    let target_schema = caps
+                        .get(1)
+                        .map(|m| m.as_str().to_string())
+                        .unwrap_or_else(|| "public".to_string());
+                    let target_table = caps
+                        .get(2)
+                        .map(|m| m.as_str().to_string())
+                        .unwrap_or_default();
+
+                    if !target_table.is_empty() {
+                        let target_key = format!("{}.{}", target_schema, target_table);
+                        let source_key = format!("{}.{}", source_schema, source_table);
+                        // Don't add self-references
+                        if target_key != source_key {
+                            fk_dependencies
+                                .entry(target_key)
+                                .or_default()
+                                .push(source_key);
+                        }
+                    }
+                }
+            }
+
+            // Match ALTER TABLE FK constraint: source_table REFERENCES target_table
+            // We want to track: when target_table is excluded, source_table data will fail
+            if let Some(caps) = fk_alter_re.captures(&line) {
+                let source_schema = caps
+                    .get(1)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_else(|| "public".to_string());
+                let source_table = caps
+                    .get(2)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default();
+                let target_schema = caps
+                    .get(3)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_else(|| "public".to_string());
+                let target_table = caps
+                    .get(4)
+                    .map(|m| m.as_str().to_string())
+                    .unwrap_or_default();
+
+                if !source_table.is_empty() && !target_table.is_empty() {
+                    let target_key = format!("{}.{}", target_schema, target_table);
+                    let source_key = format!("{}.{}", source_schema, source_table);
+                    fk_dependencies
+                        .entry(target_key)
+                        .or_default()
+                        .push(source_key);
+                }
+            }
+        }
+
+        // Update row count hints from COPY data analysis
+        for table in &mut tables {
+            let key = format!("{}.{}", table.schema_name, table.table_name);
+            if let Some(&count) = tables_with_data.get(&key) {
+                table.row_count_hint = Some(count as i64);
+            }
+            // Add dependent tables (tables that reference this table via FK)
+            // Deduplicate the list
+            if let Some(deps) = fk_dependencies.get(&key) {
+                let mut unique_deps: Vec<String> = deps.clone();
+                unique_deps.sort();
+                unique_deps.dedup();
+                table.dependent_tables = unique_deps;
+            }
+        }
+
+        Ok(tables)
+    }
+
+    /// Filter plain SQL dump to exclude data (COPY and INSERT statements) for specified tables
+    /// Keeps schema definitions (CREATE TABLE, ALTER TABLE, CREATE INDEX, etc.)
+    /// Returns path to the filtered dump file
+    fn filter_sql_dump_data_only(
+        &self,
+        dump_path: &str,
+        excluded_tables: &[String],
+    ) -> Result<String> {
+        use regex::Regex;
+        use std::io::{BufRead, Write};
+
+        let filtered_path = format!("{}.filtered", dump_path);
+
+        let file = File::open(dump_path)
+            .map_err(|e| CoreError::Internal(format!("Failed to open dump file: {}", e)))?;
+        let reader = BufReader::new(file);
+
+        let mut output = File::create(&filtered_path)
+            .map_err(|e| CoreError::Internal(format!("Failed to create filtered dump: {}", e)))?;
+
+        // Match: COPY schema.table or COPY table
+        let copy_re = Regex::new(
+            r#"(?i)^COPY\s+(?:"?([a-zA-Z_][a-zA-Z0-9_]*)"?\.)?"?([a-zA-Z_][a-zA-Z0-9_]*)"?\s*\("#,
+        )
+        .map_err(|e| CoreError::Internal(format!("Regex error: {}", e)))?;
+
+        // Match: INSERT INTO schema.table or INSERT INTO table
+        let insert_re = Regex::new(
+            r#"(?i)^INSERT\s+INTO\s+(?:"?([a-zA-Z_][a-zA-Z0-9_]*)"?\.)?"?([a-zA-Z_][a-zA-Z0-9_]*)"?\s*[\(\s]"#
+        ).map_err(|e| CoreError::Internal(format!("Regex error: {}", e)))?;
+
+        // Convert excluded_tables to a HashSet of (schema, table) for quick lookup
+        let excluded_set: std::collections::HashSet<(String, String)> = excluded_tables
+            .iter()
+            .map(|t| {
+                let parts: Vec<&str> = t.split('.').collect();
+                if parts.len() == 2 {
+                    (parts[0].to_string(), parts[1].to_string())
+                } else {
+                    ("public".to_string(), parts[0].to_string())
+                }
+            })
+            .collect();
+
+        // Helper to check if a table is excluded
+        let is_excluded = |schema: &str, table: &str| -> bool {
+            excluded_set.contains(&(schema.to_string(), table.to_string()))
+        };
+
+        let mut skip_copy_data = false;
+        let mut skip_insert_statement = false;
+        let mut skipped_tables: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+
+        for line in reader.lines() {
+            let line = match line {
+                Ok(l) => l,
+                Err(_) => continue,
+            };
+
+            // Handle COPY data skip - skip until we hit the end marker
+            if skip_copy_data {
+                if line == "\\." {
+                    skip_copy_data = false;
+                }
+                continue;
+            }
+
+            // Handle multi-line INSERT statement skip
+            if skip_insert_statement {
+                // INSERT statements end with a semicolon
+                if line.trim_end().ends_with(';') {
+                    skip_insert_statement = false;
+                }
+                continue;
+            }
+
+            // Check if this is a COPY statement for an excluded table
+            if let Some(caps) = copy_re.captures(&line) {
+                let schema = caps.get(1).map(|m| m.as_str()).unwrap_or("public");
+                let table = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                if is_excluded(schema, table) {
+                    // Skip this COPY statement and its data
+                    if line.contains("FROM stdin") {
+                        skip_copy_data = true;
+                        skipped_tables.insert(format!("{}.{}", schema, table));
+                    }
+                    continue;
+                }
+            }
+
+            // Check if this is an INSERT statement for an excluded table
+            if let Some(caps) = insert_re.captures(&line) {
+                let schema = caps.get(1).map(|m| m.as_str()).unwrap_or("public");
+                let table = caps.get(2).map(|m| m.as_str()).unwrap_or("");
+                if is_excluded(schema, table) {
+                    skipped_tables.insert(format!("{}.{}", schema, table));
+                    // Check if INSERT spans multiple lines
+                    if !line.trim_end().ends_with(';') {
+                        skip_insert_statement = true;
+                    }
+                    continue;
+                }
+            }
+
+            // Write all other lines (including CREATE TABLE, ALTER TABLE, CREATE INDEX, etc.)
+            writeln!(output, "{}", line).map_err(|e| {
+                CoreError::Internal(format!("Failed to write filtered dump: {}", e))
+            })?;
+        }
+
+        let skipped_list: Vec<String> = skipped_tables.into_iter().collect();
+        info!(
+            "Created filtered dump excluding data for {} tables: {:?}",
+            skipped_list.len(),
+            skipped_list
+        );
+
+        Ok(filtered_path)
+    }
+}
+
+/// Table preview info extracted from dump file
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct TablePreview {
+    pub schema_name: String,
+    pub table_name: String,
+    pub estimated_size_bytes: Option<i64>,
+    pub row_count_hint: Option<i64>,
+    /// Tables that have foreign key references TO this table
+    /// If this table's data is excluded, these tables will have FK violations
+    #[serde(default)]
+    pub dependent_tables: Vec<String>,
 }
 
 #[async_trait]
@@ -453,6 +944,136 @@ impl DbAdapter for PostgresAdapter {
             restored_databases
         );
         Ok(restored_databases)
+    }
+
+    async fn restore_dump_with_exclusions(
+        &self,
+        dump_path: &str,
+        db_name: &str,
+        excluded_tables: &[String],
+    ) -> Result<Vec<String>> {
+        if excluded_tables.is_empty() {
+            // No exclusions, use regular restore
+            return self.restore_dump(dump_path, db_name).await;
+        }
+
+        info!(
+            "Restoring dump {} to database {} with {} excluded tables",
+            dump_path,
+            db_name,
+            excluded_tables.len()
+        );
+
+        // Detect dump format from magic bytes, not extension
+        let actual_path = self.decompress_if_needed(dump_path).await?;
+        let is_custom_format = self.detect_pg_dump_format(&actual_path)?;
+
+        // Create database first
+        self.create_database(db_name).await?;
+
+        if is_custom_format {
+            // Custom format - use pg_restore with --exclude-table-data option
+            // This keeps the table schema but excludes the data (COPY statements)
+            let mut cmd = Command::new("pg_restore");
+            cmd.args([
+                "-h",
+                &self.host,
+                "-p",
+                &self.port.to_string(),
+                "-U",
+                &self.user,
+                "-d",
+                db_name,
+                "--no-owner",
+                "--no-privileges",
+                "--no-tablespaces",
+            ]);
+
+            // Add exclusions for each table (data only, keep schema)
+            for table in excluded_tables {
+                // --exclude-table-data excludes only data, keeps table definition
+                cmd.arg("--exclude-table-data");
+                cmd.arg(table);
+            }
+
+            cmd.arg(&actual_path);
+
+            if let Some(ref password) = self.password {
+                cmd.env("PGPASSWORD", password);
+            }
+
+            let output = cmd.output().map_err(|e| {
+                CoreError::RestoreFailed(format!("Failed to execute pg_restore: {}", e))
+            })?;
+
+            if !output.status.success() {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                let is_fatal = stderr.contains("FATAL")
+                    || (stderr.contains("ERROR")
+                        && !stderr.contains("tablespace")
+                        && !stderr.contains("transaction_timeout")
+                        && !stderr.contains("errors ignored on restore"));
+                if is_fatal {
+                    return Err(CoreError::RestoreFailed(stderr.to_string()));
+                }
+                warn!("pg_restore completed with warnings: {}", stderr);
+            }
+        } else {
+            // Plain SQL format - filter out data only (keep schema)
+            info!(
+                "Filtering plain SQL dump, excluding data for tables: {:?}",
+                excluded_tables
+            );
+            let filtered_path = self.filter_sql_dump_data_only(&actual_path, excluded_tables)?;
+
+            // Execute the filtered dump
+            let mut cmd = Command::new("psql");
+            cmd.args([
+                "-h",
+                &self.host,
+                "-p",
+                &self.port.to_string(),
+                "-U",
+                &self.user,
+                "-d",
+                db_name,
+                "-v",
+                "ON_ERROR_STOP=0",
+                "-f",
+                &filtered_path,
+            ]);
+
+            if let Some(ref password) = self.password {
+                cmd.env("PGPASSWORD", password);
+            }
+
+            let output = cmd.output();
+
+            match output {
+                Ok(output) => {
+                    if !output.status.success() {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        if stderr.contains("FATAL") {
+                            return Err(CoreError::RestoreFailed(stderr.to_string()));
+                        }
+                        warn!("psql completed with warnings: {}", stderr);
+                    }
+                }
+                Err(e) => {
+                    warn!("psql not available ({}), falling back to SQLx execution", e);
+                    self.execute_sql_with_sqlx(&filtered_path, db_name).await?;
+                }
+            }
+
+            // Clean up filtered file
+            let _ = std::fs::remove_file(&filtered_path);
+        }
+
+        info!(
+            "Successfully restored dump with exclusions, database: {}",
+            db_name
+        );
+        Ok(vec![db_name.to_string()])
     }
 
     async fn list_tables(&self, db_name: &str) -> Result<Vec<TableInfo>> {

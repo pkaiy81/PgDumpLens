@@ -470,6 +470,7 @@ dependencies = [
  "chrono",
  "flate2",
  "mockall",
+ "regex",
  "serde",
  "serde_json",
  "slug",

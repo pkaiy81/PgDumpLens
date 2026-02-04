@@ -69,12 +69,36 @@ async fn process_restore<A: DbAdapter>(
 ) -> anyhow::Result<()> {
     info!("Processing restore for dump {}", dump_id);
 
+    // Check for excluded tables
+    let row = sqlx::query(
+        r#"SELECT excluded_tables FROM dumps WHERE id = $1"#
+    )
+    .bind(dump_id)
+    .fetch_one(db_pool)
+    .await?;
+    
+    let excluded_tables: Option<Vec<String>> = row.get("excluded_tables");
+
     let dump_path = format!("{}/{}/dump.sql", config.upload_dir, dump_id);
     let sandbox_db_name = format!("sandbox_{}", dump_id.to_string().replace('-', "_"));
 
-    // Restore the dump - returns the list of database names where data was restored
-    // (may be multiple databases for pg_dumpall format dumps)
-    let restored_databases = adapter.restore_dump(&dump_path, &sandbox_db_name).await?;
+    // Restore the dump - with or without exclusions
+    let restored_databases = if let Some(ref exclusions) = excluded_tables {
+        if !exclusions.is_empty() {
+            info!(
+                "Restoring dump with {} excluded tables: {:?}",
+                exclusions.len(),
+                exclusions
+            );
+            adapter
+                .restore_dump_with_exclusions(&dump_path, &sandbox_db_name, exclusions)
+                .await?
+        } else {
+            adapter.restore_dump(&dump_path, &sandbox_db_name).await?
+        }
+    } else {
+        adapter.restore_dump(&dump_path, &sandbox_db_name).await?
+    };
 
     info!(
         "Data restored to {} database(s): {:?}",

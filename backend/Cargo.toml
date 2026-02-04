@@ -41,6 +41,7 @@ thiserror = "1.0"
 anyhow = "1.0"
 slug = "0.1"
 flate2 = "1.0"
+regex = "1.10"
 
 # Config
 config = "0.14"

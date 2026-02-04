@@ -1,12 +1,13 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useMemo } from 'react';
 import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { SchemaExplorer } from '@/components/SchemaExplorer';
 import SearchResults from '@/components/SearchResults';
 import DiffViewer from '@/components/DiffViewer';
 import { SchemaDiffResponse, TableDataDiffResponse } from '@/types';
+import { Table2, X, Check, ArrowRight, ArrowLeft, AlertTriangle } from 'lucide-react';
 
 interface Dump {
   id: string;
@@ -17,6 +18,14 @@ interface Dump {
   created_at: string;
   expires_at: string;
   error_message: string | null;
+}
+
+interface TablePreview {
+  schema_name: string;
+  table_name: string;
+  estimated_size_bytes: number | null;
+  row_count_hint: number | null;
+  dependent_tables: string[];
 }
 
 interface DatabaseList {
@@ -73,6 +82,13 @@ function formatBytes(bytes: number | null): string {
 
 function formatDate(dateString: string): string {
   return new Date(dateString).toLocaleString();
+}
+
+function formatRowCount(count: number | null): string {
+  if (count === null || count === undefined) return '-';
+  if (count >= 1000000) return `${(count / 1000000).toFixed(1)}M`;
+  if (count >= 1000) return `${(count / 1000).toFixed(1)}K`;
+  return count.toString();
 }
 
 export default function DumpDetailPage() {
@@ -159,6 +175,13 @@ export default function DumpDetailPage() {
   const [diffError, setDiffError] = useState<string | null>(null);
   const [compareFile, setCompareFile] = useState<File | null>(null);
   const [compareUploading, setCompareUploading] = useState(false);
+  
+  // Compare table selection state
+  type CompareStep = 'upload' | 'select-tables' | 'restoring';
+  const [compareStep, setCompareStep] = useState<CompareStep>('upload');
+  const [compareTables, setCompareTables] = useState<TablePreview[]>([]);
+  const [compareExcludedTables, setCompareExcludedTables] = useState<Set<string>>(new Set());
+  const [pendingCompareDumpId, setPendingCompareDumpId] = useState<string | null>(null);
   
   // Listen for browser back/forward navigation
   useEffect(() => {
@@ -275,12 +298,13 @@ export default function DumpDetailPage() {
     }
   }, [dump, selectedDb, fetchSchema, compareDumpId, fetchDiff, updateUrl]);
 
-  // Handle compare dump file upload
+  // Handle compare dump file upload - now with table selection
   const handleCompareFileUpload = async (file: File) => {
     if (!dump) return;
     
     setCompareUploading(true);
     setDiffError(null);
+    setCompareStep('upload');
     
     try {
       // Create a new dump for comparison (marked as private so it doesn't show in recents)
@@ -304,9 +328,47 @@ export default function DumpDetailPage() {
       
       if (!uploadRes.ok) throw new Error('Failed to upload comparison dump');
       
-      // Trigger restore
-      const restoreRes = await fetch(`/api/dumps/${compareDump.id}/restore`, {
+      // Fetch table preview
+      const previewRes = await fetch(`/api/dumps/${compareDump.id}/preview`);
+      if (!previewRes.ok) {
+        const errText = await previewRes.text();
+        console.error('Preview tables error:', errText);
+        throw new Error(`Failed to get table preview: ${errText}`);
+      }
+      const previewData = await previewRes.json();
+      
+      // Show table selection UI
+      setCompareTables(previewData.tables || []);
+      setCompareExcludedTables(new Set());
+      setPendingCompareDumpId(compareDump.id);
+      setCompareStep('select-tables');
+      setCompareUploading(false);
+      
+    } catch (err) {
+      console.error('Compare upload error:', err);
+      setDiffError(err instanceof Error ? err.message : 'Upload failed');
+      setCompareUploading(false);
+      setCompareFile(null);
+    }
+  };
+
+  // Proceed with compare restore after table selection
+  const proceedWithCompareRestore = async (excludedTables: string[]) => {
+    if (!dump || !pendingCompareDumpId) return;
+    
+    setCompareStep('restoring');
+    setCompareUploading(true);
+    
+    try {
+      // Trigger restore with exclusions
+      const restoreUrl = excludedTables.length > 0
+        ? `/api/dumps/${pendingCompareDumpId}/restore-with-exclusions`
+        : `/api/dumps/${pendingCompareDumpId}/restore`;
+      
+      const restoreRes = await fetch(restoreUrl, {
         method: 'POST',
+        headers: excludedTables.length > 0 ? { 'Content-Type': 'application/json' } : undefined,
+        body: excludedTables.length > 0 ? JSON.stringify({ excluded_tables: excludedTables }) : undefined,
       });
       
       if (!restoreRes.ok) throw new Error('Failed to start restore');
@@ -318,7 +380,7 @@ export default function DumpDetailPage() {
       
       while (status !== 'READY' && status !== 'ERROR' && attempts < maxAttempts) {
         await new Promise(resolve => setTimeout(resolve, 2000));
-        const statusRes = await fetch(`/api/dumps/${compareDump.id}`);
+        const statusRes = await fetch(`/api/dumps/${pendingCompareDumpId}`);
         if (!statusRes.ok) throw new Error('Failed to check comparison dump status');
         const statusData = await statusRes.json();
         status = statusData.status;
@@ -333,24 +395,79 @@ export default function DumpDetailPage() {
         throw new Error('Comparison dump processing timed out');
       }
       
-      setCompareDumpId(compareDump.id);
+      setCompareDumpId(pendingCompareDumpId);
       // Save compare dump ID to URL for persistence
-      updateUrl({ compare: compareDump.id, tab: 'compare' });
+      updateUrl({ compare: pendingCompareDumpId, tab: 'compare' });
       
       // Fetch the diff
       const dbParam = selectedDb ? `?database=${encodeURIComponent(selectedDb)}` : '';
-      const diffRes = await fetch(`/api/dumps/${dump.id}/compare/${compareDump.id}${dbParam}`);
+      const diffRes = await fetch(`/api/dumps/${dump.id}/compare/${pendingCompareDumpId}${dbParam}`);
       
       if (!diffRes.ok) throw new Error('Failed to compute diff');
       const diffData: SchemaDiffResponse = await diffRes.json();
       setDiffResult(diffData);
       
+      // Reset compare step
+      setCompareStep('upload');
+      setPendingCompareDumpId(null);
+      setCompareTables([]);
+      setCompareExcludedTables(new Set());
+      
     } catch (err) {
       setDiffError(err instanceof Error ? err.message : 'Comparison failed');
+      setCompareStep('select-tables'); // Go back to selection on error
     } finally {
       setCompareUploading(false);
       setCompareFile(null);
     }
+  };
+
+  // Toggle table exclusion for compare
+  const toggleCompareTableExclusion = (schema: string, table: string) => {
+    const key = `${schema}.${table}`;
+    const newExcluded = new Set(compareExcludedTables);
+    if (newExcluded.has(key)) {
+      newExcluded.delete(key);
+    } else {
+      newExcluded.add(key);
+    }
+    setCompareExcludedTables(newExcluded);
+  };
+
+  // Calculate affected tables for compare
+  const compareAffectedTablesInfo = useMemo(() => {
+    const affected = new Map<string, string[]>();
+    for (const excludedKey of Array.from(compareExcludedTables)) {
+      const table = compareTables.find(
+        (t) => `${t.schema_name}.${t.table_name}` === excludedKey
+      );
+      if (table && table.dependent_tables && table.dependent_tables.length > 0) {
+        for (const dep of table.dependent_tables) {
+          if (!compareExcludedTables.has(dep)) {
+            const existing = affected.get(dep) || [];
+            existing.push(excludedKey);
+            affected.set(dep, existing);
+          }
+        }
+      }
+    }
+    return affected;
+  }, [compareExcludedTables, compareTables]);
+
+  // Cancel compare table selection
+  const cancelCompareSelection = async () => {
+    // Delete the pending dump
+    if (pendingCompareDumpId) {
+      try {
+        await fetch(`/api/dumps/${pendingCompareDumpId}`, { method: 'DELETE' });
+      } catch {
+        // Ignore errors
+      }
+    }
+    setPendingCompareDumpId(null);
+    setCompareTables([]);
+    setCompareExcludedTables(new Set());
+    setCompareStep('upload');
   };
 
   // Clear comparison
@@ -771,6 +888,176 @@ export default function DumpDetailPage() {
                         }}
                       />
                     </>
+                  ) : compareStep === 'select-tables' && compareTables.length > 0 ? (
+                    /* Table Selection UI for Compare */
+                    <div className="max-w-4xl mx-auto">
+                      <div className="flex items-center justify-between mb-4">
+                        <div>
+                          <h3 className="text-lg font-semibold text-slate-800 dark:text-slate-200">
+                            Select Tables to Exclude Data
+                          </h3>
+                          <p className="text-sm text-slate-500 dark:text-slate-400">
+                            Found {compareTables.length} tables. Excluding data from large tables can reduce storage usage.
+                          </p>
+                        </div>
+                        <button
+                          onClick={cancelCompareSelection}
+                          className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-300"
+                        >
+                          <X className="w-5 h-5" />
+                        </button>
+                      </div>
+
+                      {compareExcludedTables.size > 0 && (
+                        <div className="mb-4 p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg">
+                          <p className="text-sm text-blue-700 dark:text-blue-300">
+                            <strong>{compareExcludedTables.size} table(s)</strong> will have their <strong>data excluded</strong>. 
+                            Table schema (columns, indexes, foreign keys) will be preserved for analysis.
+                          </p>
+                        </div>
+                      )}
+
+                      <div className="max-h-96 overflow-y-auto border border-slate-200 dark:border-slate-700 rounded-lg">
+                        <table className="w-full bg-white dark:bg-slate-900">
+                          <thead className="bg-slate-50 dark:bg-slate-800 sticky top-0">
+                            <tr>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider w-16">
+                                Data
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                                Schema
+                              </th>
+                              <th className="px-4 py-3 text-left text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                                Table
+                              </th>
+                              <th className="px-4 py-3 text-right text-xs font-medium text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                                Rows (approx)
+                              </th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200 dark:divide-slate-700">
+                            {compareTables.map((table) => {
+                              const key = `${table.schema_name}.${table.table_name}`;
+                              const isExcluded = compareExcludedTables.has(key);
+                              const affectedBy = compareAffectedTablesInfo.get(key);
+                              const isAffected = affectedBy && affectedBy.length > 0;
+                              return (
+                                <tr
+                                  key={key}
+                                  className={`cursor-pointer transition-colors ${
+                                    isExcluded 
+                                      ? 'bg-red-50 dark:bg-red-900/10' 
+                                      : isAffected
+                                        ? 'bg-amber-50 dark:bg-amber-900/10'
+                                        : 'hover:bg-slate-50 dark:hover:bg-slate-800'
+                                  }`}
+                                  onClick={() => toggleCompareTableExclusion(table.schema_name, table.table_name)}
+                                >
+                                  <td className="px-4 py-3">
+                                    <button
+                                      type="button"
+                                      className={`w-5 h-5 rounded border-2 flex items-center justify-center transition-colors ${
+                                        isExcluded
+                                          ? 'bg-red-500 border-red-500 text-white'
+                                          : 'bg-white dark:bg-slate-800 border-slate-300 dark:border-slate-600 text-transparent'
+                                      }`}
+                                    >
+                                      {isExcluded ? <X className="w-3 h-3" /> : <Check className="w-3 h-3" />}
+                                    </button>
+                                  </td>
+                                  <td className="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">
+                                    {table.schema_name}
+                                  </td>
+                                  <td className="px-4 py-3">
+                                    <div className="flex items-center gap-2">
+                                      <Table2 className="w-4 h-4 text-slate-400" />
+                                      <span className={`text-sm font-medium ${
+                                        isExcluded 
+                                          ? 'text-slate-400 dark:text-slate-500 line-through' 
+                                          : 'text-slate-900 dark:text-white'
+                                      }`}>
+                                        {table.table_name}
+                                      </span>
+                                      {isAffected && (
+                                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300" title={`FK references: ${affectedBy.join(', ')}`}>
+                                          <AlertTriangle className="w-3 h-3" />
+                                          FK affected
+                                        </span>
+                                      )}
+                                      {table.dependent_tables && table.dependent_tables.length > 0 && isExcluded && (
+                                        <span className="text-xs text-slate-400">
+                                          → {table.dependent_tables.length} dependent table(s)
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-3 text-right text-sm text-slate-500 dark:text-slate-400">
+                                    {formatRowCount(table.row_count_hint)}
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      {/* FK Warning Box */}
+                      {compareAffectedTablesInfo.size > 0 && (
+                        <div className="mt-4 p-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 rounded-lg">
+                          <div className="flex items-start gap-3">
+                            <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                            <div>
+                              <h4 className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+                                Foreign Key Warning
+                              </h4>
+                              <p className="text-sm text-amber-700 dark:text-amber-400 mt-1">
+                                The following tables have FK references to excluded tables and their data will also fail to import:
+                              </p>
+                              <ul className="mt-2 text-sm text-amber-700 dark:text-amber-400 list-disc list-inside">
+                                {Array.from(compareAffectedTablesInfo.entries()).map(([table, parents]) => (
+                                  <li key={table}>
+                                    <span className="font-medium">{table}</span>
+                                    <span className="text-amber-600 dark:text-amber-500"> (references: {parents.join(', ')})</span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="flex items-center justify-between pt-4">
+                        <button
+                          onClick={() => proceedWithCompareRestore([])}
+                          className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors flex items-center gap-2"
+                        >
+                          <ArrowLeft className="w-4 h-4" />
+                          Include All Data
+                        </button>
+                        <button
+                          onClick={() => proceedWithCompareRestore(Array.from(compareExcludedTables))}
+                          className="px-6 py-3 bg-gradient-to-r from-indigo-500 to-purple-600 text-white rounded-xl hover:from-indigo-600 hover:to-purple-700 transition-all duration-200 font-medium shadow-lg hover:shadow-xl flex items-center gap-2"
+                        >
+                          {compareExcludedTables.size > 0 ? (
+                            <>
+                              Skip Data for {compareExcludedTables.size} Table(s)
+                              <ArrowRight className="w-4 h-4" />
+                            </>
+                          ) : (
+                            <>
+                              Include All Data
+                              <ArrowRight className="w-4 h-4" />
+                            </>
+                          )}
+                        </button>
+                      </div>
+
+                      {diffError && (
+                        <div className="mt-4 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg text-red-600 dark:text-red-400 text-sm">
+                          {diffError}
+                        </div>
+                      )}
+                    </div>
                   ) : (
                     <div className="text-center py-12">
                       <div className="max-w-md mx-auto">
@@ -789,11 +1076,11 @@ export default function DumpDetailPage() {
                         )}
                         
                         <div className="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-xl p-8 hover:border-indigo-400 dark:hover:border-indigo-500 transition-colors">
-                          {compareUploading ? (
+                          {compareUploading || compareStep === 'restoring' ? (
                             <div className="flex flex-col items-center">
                               <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-indigo-500 mb-4"></div>
                               <p className="text-slate-600 dark:text-slate-400">
-                                Processing comparison dump...
+                                {compareStep === 'restoring' ? 'Restoring comparison dump...' : 'Processing comparison dump...'}
                               </p>
                               <p className="text-xs text-slate-400 dark:text-slate-500 mt-1">
                                 This may take a few minutes for large dumps
