@@ -12,6 +12,7 @@ use uuid::Uuid;
 use crate::error::{ApiError, ApiResult};
 use crate::state::AppState;
 use db_viewer_core::adapter::DbAdapter;
+use db_viewer_core::adapter::TablePreview;
 use db_viewer_core::domain::{Dump, DumpStatus};
 
 /// Create dump request
@@ -388,6 +389,130 @@ fn extract_original_db_name(sandbox_name: &str) -> String {
     }
     // Return as-is if not in the expected format
     sandbox_name.to_string()
+}
+
+/// Response for table preview
+#[derive(Debug, Serialize)]
+pub struct TablePreviewResponse {
+    pub tables: Vec<TablePreview>,
+    pub total_count: usize,
+}
+
+/// Get preview of tables in an uploaded dump file (before restore)
+/// This allows users to select which tables to exclude from restore
+pub async fn preview_tables(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+) -> ApiResult<Json<TablePreviewResponse>> {
+    // Check if dump exists and has been uploaded
+    let row = sqlx::query(
+        r#"
+        SELECT status
+        FROM dumps
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await?;
+
+    let row = row.ok_or_else(|| ApiError::NotFound(format!("Dump {} not found", id)))?;
+    let status: String = row.get("status");
+
+    // Only allow preview for UPLOADED status (after upload, before restore)
+    if status != "UPLOADED" && status != "CREATED" {
+        return Err(ApiError::BadRequest(format!(
+            "Cannot preview tables for dump in '{}' status. Upload the dump file first.",
+            status
+        )));
+    }
+
+    // Find the dump file
+    let dump_dir = std::path::Path::new(&state.config.upload_dir).join(id.to_string());
+    let dump_file = dump_dir.join("dump.sql");
+
+    if !dump_file.exists() {
+        return Err(ApiError::NotFound(
+            "Dump file not found. Please upload the dump file first.".to_string(),
+        ));
+    }
+
+    // Create a temporary adapter to extract tables
+    // We don't need actual database connection for table extraction
+    let dummy_pool = state.db_pool.clone(); // Just for creating adapter, not used
+    let adapter = db_viewer_core::adapter::PostgresAdapter::new(
+        dummy_pool,
+        state.config.sandbox_host.clone(),
+        state.config.sandbox_port,
+        state.config.sandbox_user.clone(),
+        state.config.sandbox_password.clone(),
+    );
+
+    let tables = adapter
+        .extract_tables_from_dump(dump_file.to_str().unwrap())
+        .map_err(|e| ApiError::Internal(format!("Failed to extract tables from dump: {}", e)))?;
+
+    let total_count = tables.len();
+
+    Ok(Json(TablePreviewResponse {
+        tables,
+        total_count,
+    }))
+}
+
+/// Request for restore with excluded tables
+#[derive(Debug, Deserialize)]
+pub struct RestoreWithExclusionsRequest {
+    /// List of tables to exclude (format: "schema.table_name")
+    pub excluded_tables: Option<Vec<String>>,
+}
+
+/// Restore a dump with table exclusions
+pub async fn restore_dump_with_exclusions(
+    State(state): State<AppState>,
+    Path(id): Path<Uuid>,
+    Json(req): Json<RestoreWithExclusionsRequest>,
+) -> ApiResult<Json<Dump>> {
+    // Check if dump exists and is in uploaded state
+    let row = sqlx::query(
+        r#"
+        SELECT status
+        FROM dumps
+        WHERE id = $1
+        "#,
+    )
+    .bind(id)
+    .fetch_optional(&state.db_pool)
+    .await?;
+
+    let row = row.ok_or_else(|| ApiError::NotFound(format!("Dump {} not found", id)))?;
+    let status: String = row.get("status");
+
+    if status != "UPLOADED" {
+        return Err(ApiError::BadRequest(format!(
+            "Cannot restore dump in '{}' status. Only UPLOADED dumps can be restored.",
+            status
+        )));
+    }
+
+    // Save excluded tables to database
+    let excluded_tables = req.excluded_tables.unwrap_or_default();
+
+    sqlx::query(
+        r#"
+        UPDATE dumps
+        SET status = $1, updated_at = $2, excluded_tables = $3
+        WHERE id = $4
+        "#,
+    )
+    .bind(DumpStatus::Restoring.as_str())
+    .bind(Utc::now())
+    .bind(&excluded_tables)
+    .bind(id)
+    .execute(&state.db_pool)
+    .await?;
+
+    fetch_dump_by_id(&state, id).await.map(Json)
 }
 
 /// Delete a dump and clean up associated resources

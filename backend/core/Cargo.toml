@@ -16,6 +16,7 @@ anyhow.workspace = true
 slug.workspace = true
 tracing.workspace = true
 flate2.workspace = true
+regex.workspace = true
 
 [dev-dependencies]
 mockall.workspace = true

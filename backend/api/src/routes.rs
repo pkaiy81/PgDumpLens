@@ -38,6 +38,14 @@ pub fn create_router(state: AppState) -> Router {
             post(handlers::dumps::restore_dump),
         )
         .route(
+            "/api/dumps/:id/preview",
+            get(handlers::dumps::preview_tables),
+        )
+        .route(
+            "/api/dumps/:id/restore-with-exclusions",
+            post(handlers::dumps::restore_dump_with_exclusions),
+        )
+        .route(
             "/api/dumps/:id/databases",
             get(handlers::dumps::get_dump_databases),
         )

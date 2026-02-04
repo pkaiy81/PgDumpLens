@@ -7,6 +7,7 @@ use async_trait::async_trait;
 pub mod postgres;
 
 pub use postgres::PostgresAdapter;
+pub use postgres::TablePreview;
 
 /// Abstract database adapter trait
 ///
@@ -18,6 +19,15 @@ pub trait DbAdapter: Send + Sync {
     /// Returns a list of database names where data was restored
     /// (for pg_dumpall format, multiple databases may be created)
     async fn restore_dump(&self, dump_path: &str, db_name: &str) -> Result<Vec<String>>;
+
+    /// Restore a dump file with table exclusions
+    /// excluded_tables is a list of "schema.table_name" to skip
+    async fn restore_dump_with_exclusions(
+        &self,
+        dump_path: &str,
+        db_name: &str,
+        excluded_tables: &[String],
+    ) -> Result<Vec<String>>;
 
     /// List all tables in the database
     async fn list_tables(&self, db_name: &str) -> Result<Vec<TableInfo>>;
@@ -71,6 +81,12 @@ mod tests {
         #[async_trait]
         impl DbAdapter for TestAdapter {
             async fn restore_dump(&self, dump_path: &str, db_name: &str) -> Result<Vec<String>>;
+            async fn restore_dump_with_exclusions(
+                &self,
+                dump_path: &str,
+                db_name: &str,
+                excluded_tables: &[String],
+            ) -> Result<Vec<String>>;
             async fn list_tables(&self, db_name: &str) -> Result<Vec<TableInfo>>;
             async fn list_foreign_keys(&self, db_name: &str) -> Result<Vec<ForeignKey>>;
             async fn build_schema_graph(&self, db_name: &str) -> Result<SchemaGraph>;

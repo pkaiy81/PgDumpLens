@@ -133,15 +133,23 @@ sequenceDiagram
     API->>MetaDB: Update status=UPLOADED
     API-->>Frontend: 200 OK
     
+    Frontend->>API: GET /api/dumps/{id}/preview
+    API->>Storage: Parse dump file
+    API-->>Frontend: {tables, row_counts, fk_deps}
+    
+    Note over Frontend: User selects tables to exclude
+    
     Frontend->>API: POST /api/dumps/{id}/restore
+    Note right of Frontend: Body: {excluded_tables: [...]}
     API->>MetaDB: Update status=RESTORING
     API-->>Frontend: 202 Accepted
     
     Note over Worker: Polling loop
     Worker->>MetaDB: Fetch RESTORING jobs
     Worker->>Storage: Read dump file
+    Worker->>Storage: Filter excluded table data
     Worker->>SandboxDB: CREATE DATABASE
-    Worker->>SandboxDB: pg_restore / psql
+    Worker->>SandboxDB: pg_restore / psql (filtered)
     Worker->>MetaDB: Update status=ANALYZING
     
     Worker->>SandboxDB: ANALYZE (update stats)
@@ -153,7 +161,38 @@ sequenceDiagram
 
 ---
 
-## 5. Request Flow - Data Browsing with Filter
+## 5. Request Flow - Table Preview & Selective Restore
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant Frontend
+    participant API
+    participant Storage
+
+    User->>Frontend: Upload dump file
+    Frontend->>API: PUT /api/dumps/{id}/upload
+    API->>Storage: Save dump file
+    API-->>Frontend: 200 OK
+    
+    Frontend->>API: GET /api/dumps/{id}/preview
+    API->>Storage: Parse dump SQL
+    Note right of API: Extract CREATE TABLE,<br/>COPY/INSERT row counts,<br/>FK REFERENCES
+    API-->>Frontend: TablePreview[]
+    
+    Note over Frontend: Display table list with:<br/>- Table name<br/>- Estimated rows<br/>- FK dependencies
+    
+    User->>Frontend: Deselect tables to exclude
+    Note over Frontend: Show FK warning if<br/>dependent tables exist
+    
+    User->>Frontend: Click "Restore & Analyze"
+    Frontend->>API: POST /api/dumps/{id}/restore
+    Note right of Frontend: Body: {excluded_tables: ["users", "logs"]}
+```
+
+---
+
+## 6. Request Flow - Data Browsing with Filter
 
 ```mermaid
 sequenceDiagram
@@ -178,7 +217,7 @@ sequenceDiagram
 
 ---
 
-## 6. Request Flow - Relationship Exploration
+## 7. Request Flow - Relationship Exploration
 
 ```mermaid
 sequenceDiagram
@@ -207,7 +246,7 @@ sequenceDiagram
 
 ---
 
-## 7. Dump Comparison & Data Diff Flow
+## 8. Dump Comparison & Data Diff Flow
 
 ```mermaid
 sequenceDiagram
@@ -259,7 +298,7 @@ FROM (SELECT * FROM "schema"."table" ORDER BY 1 LIMIT 10000) t
 
 ---
 
-## 8. Risk Assessment Model
+## 9. Risk Assessment Model
 
 ```mermaid
 flowchart TD
@@ -293,7 +332,7 @@ flowchart TD
 
 ---
 
-## 9. Docker Compose Configurations
+## 10. Docker Compose Configurations
 
 | ファイル                  | 用途               | 特徴                               |
 | ------------------------- | ------------------ | ---------------------------------- |
@@ -303,7 +342,7 @@ flowchart TD
 
 ---
 
-## 10. Kubernetes Deployment Architecture
+## 11. Kubernetes Deployment Architecture
 
 ```mermaid
 graph TB
@@ -356,7 +395,7 @@ graph TB
 
 ---
 
-## 11. ER Diagram Generation Flow
+## 12. ER Diagram Generation Flow
 
 ```mermaid
 flowchart LR
@@ -379,7 +418,7 @@ flowchart LR
 
 ---
 
-## 12. Data Flow Summary
+## 13. Data Flow Summary
 
 | Flow          | Source           | Destination          | Data                  |
 | ------------- | ---------------- | -------------------- | --------------------- |
@@ -394,7 +433,7 @@ flowchart LR
 
 ---
 
-## 13. Technology Stack
+## 14. Technology Stack
 
 ```mermaid
 mindmap

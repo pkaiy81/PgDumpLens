@@ -13,6 +13,7 @@ A web application for uploading PostgreSQL dump files and visualizing/analyzing 
 ## 📋 Features
 
 - **Dump Upload**: Upload dump files created with `pg_dump` / `pg_dumpall`
+- **Selective Restore**: Selectively exclude table data during restore (with FK constraint warnings)
 - **Multi-Database Support**: View and switch between multiple databases in `pg_dumpall` format
 - **ER Diagram Generation**: Automatically visualize table relationships with Mermaid.js (PNG/SVG export)
 - **Data Browsing**: Browse table data in your browser with pagination
