@@ -70,13 +70,11 @@ async fn process_restore<A: DbAdapter>(
     info!("Processing restore for dump {}", dump_id);
 
     // Check for excluded tables
-    let row = sqlx::query(
-        r#"SELECT excluded_tables FROM dumps WHERE id = $1"#
-    )
-    .bind(dump_id)
-    .fetch_one(db_pool)
-    .await?;
-    
+    let row = sqlx::query(r#"SELECT excluded_tables FROM dumps WHERE id = $1"#)
+        .bind(dump_id)
+        .fetch_one(db_pool)
+        .await?;
+
     let excluded_tables: Option<Vec<String>> = row.get("excluded_tables");
 
     let dump_path = format!("{}/{}/dump.sql", config.upload_dir, dump_id);
