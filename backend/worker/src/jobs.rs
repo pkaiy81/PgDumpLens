@@ -327,6 +327,75 @@ pub async fn cleanup_expired_dumps<A: DbAdapter>(
     Ok(cleaned)
 }
 
+/// Cleanup stale uploaded dumps that were never restored
+/// This handles the case where a user uploads a dump, sees the table preview,
+/// but navigates away without clicking "Restore & Analyze"
+pub async fn cleanup_stale_uploads(
+    db_pool: &PgPool,
+    config: &WorkerConfig,
+) -> anyhow::Result<usize> {
+    // Consider a dump "stale" if it's been in UPLOADED status for more than 1 hour
+    let stale_threshold = Utc::now() - chrono::Duration::hours(1);
+
+    // Find stale uploads
+    let stale_dumps = sqlx::query(
+        r#"
+        SELECT id
+        FROM dumps
+        WHERE status = 'UPLOADED'
+          AND updated_at < $1
+        "#,
+    )
+    .bind(stale_threshold)
+    .fetch_all(db_pool)
+    .await?;
+
+    if stale_dumps.is_empty() {
+        return Ok(0);
+    }
+
+    info!(
+        "Found {} stale uploaded dumps to cleanup",
+        stale_dumps.len()
+    );
+    let mut cleaned = 0;
+
+    for row in stale_dumps {
+        let dump_id: Uuid = row.get("id");
+
+        info!("Cleaning up stale uploaded dump: {}", dump_id);
+
+        // Remove uploaded file from disk
+        let upload_dir = format!("{}/{}", config.upload_dir, dump_id);
+        if let Err(e) = tokio::fs::remove_dir_all(&upload_dir).await {
+            warn!(
+                "Failed to remove upload directory for stale dump {}: {}",
+                dump_id, e
+            );
+            // Continue cleanup even if file removal fails
+        }
+
+        // Mark dump as DELETED in metadata
+        sqlx::query(
+            r#"
+            UPDATE dumps
+            SET status = $1, updated_at = $2
+            WHERE id = $3
+            "#,
+        )
+        .bind(DumpStatus::Deleted.as_str())
+        .bind(Utc::now())
+        .bind(dump_id)
+        .execute(db_pool)
+        .await?;
+
+        info!("Successfully cleaned up stale uploaded dump: {}", dump_id);
+        cleaned += 1;
+    }
+
+    Ok(cleaned)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
