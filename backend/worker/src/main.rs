@@ -79,6 +79,19 @@ async fn main() -> anyhow::Result<()> {
                     error!("Error during cleanup: {}", e);
                 }
             }
+
+            // Also cleanup stale uploads (UPLOADED status for more than 1 hour)
+            match jobs::cleanup_stale_uploads(&db_pool, &config).await {
+                Ok(cleaned) => {
+                    if cleaned > 0 {
+                        info!("Cleaned up {} stale uploaded dumps", cleaned);
+                    }
+                }
+                Err(e) => {
+                    error!("Error during stale upload cleanup: {}", e);
+                }
+            }
+
             last_cleanup = Instant::now();
         }
 
