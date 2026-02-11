@@ -72,14 +72,48 @@ PgDumpLensは以下のPostgreSQLダンプファイルに対応しています：
 **Linux/Mac:**
 
 ```bash
+# 基本的なアップロード
 ./scripts/upload-dump.sh ./backup.sql "My Database" http://localhost:8080
+
+# 公開ダンプとしてアップロード（Recent Dumpsに表示される）
+./scripts/upload-dump.sh ./backup.sql "My Database" --public
+
+# テーブル除外付きアップロード
+./scripts/upload-dump.sh ./backup.sql --exclude-tables 'public.large_logs,public.audit_trail'
+
+# テーブル一覧を確認してからアップロード
+./scripts/upload-dump.sh ./backup.sql --preview-tables
+
+# 組み合わせ例
+./scripts/upload-dump.sh ./backup.sql "Production" http://localhost:8080 --public --preview-tables --exclude-tables 'public.large_logs'
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
+# 基本的なアップロード
 .\scripts\upload-dump.ps1 -DumpFile .\backup.sql -Name "My Database" -ServerUrl http://localhost:8080
+
+# 公開ダンプとしてアップロード
+.\scripts\upload-dump.ps1 -DumpFile .\backup.sql -Name "My Database" -Public
+
+# テーブル除外付きアップロード
+.\scripts\upload-dump.ps1 -DumpFile .\backup.sql -ExcludeTables 'public.large_logs','public.audit_trail'
+
+# テーブル一覧を確認してからアップロード
+.\scripts\upload-dump.ps1 -DumpFile .\backup.sql -PreviewTables
+
+# 組み合わせ例
+.\scripts\upload-dump.ps1 -DumpFile .\backup.sql -Name "Production" -Public -PreviewTables -ExcludeTables 'public.large_logs'
 ```
+
+**CLIオプション一覧:**
+
+| オプション (Bash)       | オプション (PowerShell) | 説明                                                         |
+| ----------------------- | ----------------------- | ------------------------------------------------------------ |
+| `--public`              | `-Public`               | Recent Dumpsリストに表示する（デフォルト: 非公開）           |
+| `--exclude-tables LIST` | `-ExcludeTables LIST`   | 除外するテーブルのカンマ区切りリスト（形式: `schema.table`） |
+| `--preview-tables`      | `-PreviewTables`        | リストア前にダンプ内のテーブル一覧を表示する                 |
 
 ### 処理の流れ
 
