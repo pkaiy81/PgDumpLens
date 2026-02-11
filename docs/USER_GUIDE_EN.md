@@ -59,19 +59,61 @@ PgDumpLens supports the following PostgreSQL dump file formats:
 
 5. **Click "Upload & Analyze"**
 
+6. **Table Data Selection (Optional)**
+   - After upload, a table list is displayed
+   - Each table shows estimated row count (Rows approx)
+   - Uncheck tables you want to exclude from the restore
+   - ⚠️ **FK Constraint Warning**: If other tables reference a table you're excluding, a warning is displayed
+
+> **💡 FK Constraint Warning**: For example, if you exclude the `users` table and the `orders` table references `users`, the `orders` data import may also fail. Check the dependent tables shown in the warning and exclude them together if necessary.
+
 #### Method 2: Via Command Line (CLI)
 
 **Linux/Mac:**
 
 ```bash
+# Basic upload
 ./scripts/upload-dump.sh ./backup.sql "My Database" http://localhost:8080
+
+# Upload as public dump (shown in Recent Dumps)
+./scripts/upload-dump.sh ./backup.sql "My Database" --public
+
+# Upload with table exclusions
+./scripts/upload-dump.sh ./backup.sql --exclude-tables 'public.large_logs,public.audit_trail'
+
+# Preview tables before restore
+./scripts/upload-dump.sh ./backup.sql --preview-tables
+
+# Combined example
+./scripts/upload-dump.sh ./backup.sql "Production" http://localhost:8080 --public --preview-tables --exclude-tables 'public.large_logs'
 ```
 
 **Windows (PowerShell):**
 
 ```powershell
+# Basic upload
 .\scripts\upload-dump.ps1 -DumpFile .\backup.sql -Name "My Database" -ServerUrl http://localhost:8080
+
+# Upload as public dump
+.\scripts\upload-dump.ps1 -DumpFile .\backup.sql -Name "My Database" -Public
+
+# Upload with table exclusions
+.\scripts\upload-dump.ps1 -DumpFile .\backup.sql -ExcludeTables 'public.large_logs','public.audit_trail'
+
+# Preview tables before restore
+.\scripts\upload-dump.ps1 -DumpFile .\backup.sql -PreviewTables
+
+# Combined example
+.\scripts\upload-dump.ps1 -DumpFile .\backup.sql -Name "Production" -Public -PreviewTables -ExcludeTables 'public.large_logs'
 ```
+
+**CLI Options:**
+
+| Option (Bash)           | Option (PowerShell)   | Description                                                        |
+| ----------------------- | --------------------- | ------------------------------------------------------------------ |
+| `--public`              | `-Public`             | Show in Recent Dumps list (default: private)                       |
+| `--exclude-tables LIST` | `-ExcludeTables LIST` | Comma-separated list of tables to exclude (format: `schema.table`) |
+| `--preview-tables`      | `-PreviewTables`      | Show table list in the dump before restore                         |
 
 ### Processing Flow
 

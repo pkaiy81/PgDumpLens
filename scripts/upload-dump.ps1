@@ -1,5 +1,15 @@
 # PgDumpLens CLI Upload Script (PowerShell)
-# Usage: .\scripts\upload-dump.ps1 -DumpFile <path> [-Name <name>] [-ServerUrl <url>] [-Public]
+# Usage: .\scripts\upload-dump.ps1 -DumpFile <path> [-Name <name>] [-ServerUrl <url>] [-Public] [-ExcludeTables <list>] [-PreviewTables]
+#
+# API Flow:
+#   1. POST /api/dumps                        - Create dump session
+#   2. PUT  /api/dumps/:id/upload              - Upload file (multipart)
+#   3. GET  /api/dumps/:id/preview             - (optional) Preview tables
+#   4. POST /api/dumps/:id/restore             - Trigger restore (no exclusions)
+#      POST /api/dumps/:id/restore-with-exclusions - Trigger restore (with exclusions)
+#   5. GET  /api/dumps/:id                     - Poll status until READY
+#
+# Status transitions: CREATED -> UPLOADED -> RESTORING -> ANALYZING -> READY (or ERROR)
 
 [CmdletBinding()]
 param(
@@ -14,7 +24,13 @@ param(
     [string]$ServerUrl = "http://localhost:8080",
 
     [Parameter()]
-    [switch]$Public  # Default to private; use -Public to show in Recent Dumps
+    [switch]$Public,  # Default to private; use -Public to show in Recent Dumps
+
+    [Parameter()]
+    [string[]]$ExcludeTables,  # Tables to exclude (format: "schema.table")
+
+    [Parameter()]
+    [switch]$PreviewTables  # Show available tables before restore
 )
 
 $ErrorActionPreference = "Stop"
@@ -26,6 +42,7 @@ $IsPrivate = -not $Public
 function Write-Info { param($Message) Write-Host "[INFO] $Message" -ForegroundColor Green }
 function Write-Warn { param($Message) Write-Host "[WARN] $Message" -ForegroundColor Yellow }
 function Write-Err { param($Message) Write-Host "[ERROR] $Message" -ForegroundColor Red }
+function Write-Step { param($Message) Write-Host "[STEP] $Message" -ForegroundColor Cyan }
 
 # Get file info
 $FileInfo = Get-Item $DumpFile
@@ -41,10 +58,25 @@ Write-Info "  Name: $Name"
 Write-Info "  Size: ${FileSizeMB}MB"
 Write-Info "  Server: $ServerUrl"
 Write-Info "  Private: $IsPrivate"
+if ($ExcludeTables) {
+    Write-Info "  Exclude: $($ExcludeTables -join ', ')"
+}
+Write-Host ""
+
+# Determine total steps
+$hasExclusions = ($ExcludeTables -and $ExcludeTables.Count -gt 0) -or $PreviewTables
+$totalSteps = if ($hasExclusions) { 4 } else { 3 }
+$currentStep = 0
+
+function Next-Step {
+    param($Message)
+    $script:currentStep++
+    Write-Step "$($script:currentStep)/$totalSteps $Message"
+}
 
 try {
-    # Step 1: Create dump session
-    Write-Info "Creating dump session..."
+    # Step: Create dump session
+    Next-Step "Creating dump session..."
     $createBody = @{
         name = $Name
         is_private = $IsPrivate
@@ -65,13 +97,14 @@ try {
     }
 
     Write-Info "Dump ID: $dumpId"
+    Write-Info "Slug: $slug"
 
-    # Step 2: Upload file using multipart
-    Write-Info "Uploading file..."
+    # Step: Upload file using multipart (PUT /api/dumps/:id/upload)
+    Next-Step "Uploading file..."
     $boundary = [System.Guid]::NewGuid().ToString()
     $fileBytes = [System.IO.File]::ReadAllBytes($FileInfo.FullName)
     $fileEnc = [System.Text.Encoding]::GetEncoding("iso-8859-1").GetString($fileBytes)
-    
+
     $uploadBodyLines = @(
         "--$boundary",
         "Content-Disposition: form-data; name=`"file`"; filename=`"$($FileInfo.Name)`"",
@@ -82,31 +115,79 @@ try {
     )
     $uploadBody = $uploadBodyLines -join "`r`n"
 
-    Invoke-RestMethod -Uri "$ServerUrl$uploadUrl" `
+    $uploadResponse = Invoke-RestMethod -Uri "$ServerUrl$uploadUrl" `
         -Method Put `
         -ContentType "multipart/form-data; boundary=$boundary" `
-        -Body $uploadBody | Out-Null
+        -Body $uploadBody
 
-    # Step 3: Trigger restore
-    Write-Info "Triggering analysis..."
-    try {
-        Invoke-RestMethod -Uri "$ServerUrl/api/dumps/$dumpId/restore" -Method Post | Out-Null
-    }
-    catch {
-        Write-Warn "Failed to trigger analysis, but upload was successful"
+    Write-Info "Upload status: $($uploadResponse.status)"
+
+    # Step (optional): Preview tables
+    if ($PreviewTables -or ($ExcludeTables -and $ExcludeTables.Count -gt 0)) {
+        Next-Step "Fetching table preview..."
+        try {
+            $previewResponse = Invoke-RestMethod -Uri "$ServerUrl/api/dumps/$dumpId/preview" -Method Get
+            Write-Info "Tables found in dump: $($previewResponse.total_count)"
+
+            if ($PreviewTables) {
+                Write-Host ""
+                Write-Host "Available tables:"
+                foreach ($table in $previewResponse.tables) {
+                    $rows = if ($table.estimated_rows) { " (est. $($table.estimated_rows) rows)" } else { "" }
+                    Write-Host "  - $($table.schema_name).$($table.table_name)$rows"
+                }
+                Write-Host ""
+            }
+        }
+        catch {
+            Write-Warn "Failed to preview tables: $_"
+        }
     }
 
+    # Step: Trigger restore & analysis
+    Next-Step "Triggering restore & analysis..."
+
+    if ($ExcludeTables -and $ExcludeTables.Count -gt 0) {
+        # Use restore-with-exclusions endpoint
+        Write-Info "Excluding tables: $($ExcludeTables -join ', ')"
+        $restoreBody = @{
+            excluded_tables = $ExcludeTables
+        } | ConvertTo-Json
+
+        try {
+            $restoreResponse = Invoke-RestMethod -Uri "$ServerUrl/api/dumps/$dumpId/restore-with-exclusions" `
+                -Method Post `
+                -ContentType "application/json" `
+                -Body $restoreBody
+            Write-Info "Restore status: $($restoreResponse.status)"
+        }
+        catch {
+            Write-Warn "Failed to trigger restore, but upload was successful"
+            Write-Warn "The dump must be restored manually."
+        }
+    }
+    else {
+        # Use standard restore endpoint
+        try {
+            $restoreResponse = Invoke-RestMethod -Uri "$ServerUrl/api/dumps/$dumpId/restore" -Method Post
+            Write-Info "Restore status: $($restoreResponse.status)"
+        }
+        catch {
+            Write-Warn "Failed to trigger restore, but upload was successful"
+            Write-Warn "The dump must be restored manually."
+        }
+    }
+
+    Write-Host ""
     Write-Info "Upload successful!"
     if ($slug) {
         Write-Info "View in browser: $ServerUrl/d/$slug"
     }
-    else {
-        Write-Info "Dump ID: $dumpId"
-    }
 
-    # Wait for analysis
+    # Wait for analysis to complete (poll GET /api/dumps/:id)
+    Write-Host ""
     Write-Info "Waiting for analysis to complete..."
-    $maxAttempts = 60
+    $maxAttempts = 120
     $attempt = 0
 
     while ($attempt -lt $maxAttempts) {
@@ -115,23 +196,16 @@ try {
             $status = $statusResponse.status
 
             switch ($status) {
-                "analyzed" {
-                    Write-Info "Analysis complete!"
-                    
-                    if ($statusResponse.schema_graph -and $statusResponse.schema_graph.tables) {
-                        $tableCount = $statusResponse.schema_graph.tables.Count
-                        Write-Info "Tables found: $tableCount"
-                    }
-                    
-                    if ($statusResponse.risk_summary) {
-                        Write-Info "Risk level: $($statusResponse.risk_summary.level)"
-                    }
-                    
+                "READY" {
+                    Write-Host ""
+                    Write-Info "Analysis complete! Status: READY"
+                    Write-Info "View in browser: $ServerUrl/d/$slug"
                     exit 0
                 }
-                "failed" {
-                    Write-Err "Analysis failed"
-                    Write-Host ($statusResponse | ConvertTo-Json -Depth 5)
+                "ERROR" {
+                    Write-Host ""
+                    $errorMsg = if ($statusResponse.error_message) { $statusResponse.error_message } else { "Unknown error" }
+                    Write-Err "Analysis failed: $errorMsg"
                     exit 1
                 }
                 default {
@@ -142,13 +216,15 @@ try {
             }
         }
         catch {
-            Write-Host "." -NoNewline
+            Write-Host "?" -NoNewline
             Start-Sleep -Seconds 2
             $attempt++
         }
     }
 
-    Write-Warn "Timeout waiting for analysis. Check status manually."
+    Write-Host ""
+    Write-Warn "Timeout waiting for analysis (${maxAttempts}x2s). Check status manually:"
+    Write-Warn "  Invoke-RestMethod -Uri '$ServerUrl/api/dumps/$dumpId' | Select-Object -ExpandProperty status"
 }
 catch {
     Write-Err "Upload failed: $_"
