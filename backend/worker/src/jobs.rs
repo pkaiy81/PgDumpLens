@@ -327,22 +327,25 @@ pub async fn cleanup_expired_dumps<A: DbAdapter>(
     Ok(cleaned)
 }
 
-/// Cleanup stale uploaded dumps that were never restored
-/// This handles the case where a user uploads a dump, sees the table preview,
-/// but navigates away without clicking "Restore & Analyze"
-pub async fn cleanup_stale_uploads(
+/// Cleanup stale dumps that are stuck in non-terminal states
+/// This handles:
+/// - UPLOADED: user uploaded but never triggered restore (e.g. previewed tables then left)
+/// - ERROR: restore or analysis failed
+/// - CREATED: session created but file never uploaded
+pub async fn cleanup_stale_dumps<A: DbAdapter>(
     db_pool: &PgPool,
+    adapter: &A,
     config: &WorkerConfig,
 ) -> anyhow::Result<usize> {
-    // Consider a dump "stale" if it's been in UPLOADED status for more than 1 hour
-    let stale_threshold = Utc::now() - chrono::Duration::hours(1);
+    let stale_threshold =
+        Utc::now() - chrono::Duration::minutes(config.stale_dump_timeout_mins as i64);
 
-    // Find stale uploads
+    // Find stale dumps in UPLOADED, ERROR, or CREATED status
     let stale_dumps = sqlx::query(
         r#"
-        SELECT id
+        SELECT id, status, sandbox_db_name, sandbox_databases
         FROM dumps
-        WHERE status = 'UPLOADED'
+        WHERE status IN ('UPLOADED', 'ERROR', 'CREATED')
           AND updated_at < $1
         "#,
     )
@@ -355,24 +358,57 @@ pub async fn cleanup_stale_uploads(
     }
 
     info!(
-        "Found {} stale uploaded dumps to cleanup",
-        stale_dumps.len()
+        "Found {} stale dumps to cleanup (threshold: {} mins)",
+        stale_dumps.len(),
+        config.stale_dump_timeout_mins
     );
     let mut cleaned = 0;
 
     for row in stale_dumps {
         let dump_id: Uuid = row.get("id");
+        let status: String = row.get("status");
+        let sandbox_db_name: Option<String> = row.get("sandbox_db_name");
+        let sandbox_databases: Option<Vec<String>> = row.get("sandbox_databases");
 
-        info!("Cleaning up stale uploaded dump: {}", dump_id);
+        info!("Cleaning up stale dump: {} (status: {})", dump_id, status);
+
+        // Drop sandbox databases if any were created (possible for ERROR status)
+        let mut dbs_to_drop: Vec<String> = Vec::new();
+        if let Some(dbs) = sandbox_databases {
+            dbs_to_drop.extend(dbs);
+        } else if let Some(db) = sandbox_db_name {
+            dbs_to_drop.push(db);
+        }
+
+        for db_name in &dbs_to_drop {
+            match adapter.drop_database(db_name).await {
+                Ok(_) => {
+                    info!("Dropped sandbox database: {}", db_name);
+                }
+                Err(e) => {
+                    warn!("Failed to drop sandbox database {}: {}", db_name, e);
+                }
+            }
+        }
 
         // Remove uploaded file from disk
         let upload_dir = format!("{}/{}", config.upload_dir, dump_id);
-        if let Err(e) = tokio::fs::remove_dir_all(&upload_dir).await {
-            warn!(
-                "Failed to remove upload directory for stale dump {}: {}",
-                dump_id, e
-            );
-            // Continue cleanup even if file removal fails
+        if Path::new(&upload_dir).exists() {
+            if let Err(e) = std::fs::remove_dir_all(&upload_dir) {
+                warn!(
+                    "Failed to remove upload directory for stale dump {}: {}",
+                    dump_id, e
+                );
+            }
+        }
+
+        // Delete schema cache if any
+        if let Err(e) = sqlx::query("DELETE FROM dump_schemas WHERE dump_id = $1")
+            .bind(dump_id)
+            .execute(db_pool)
+            .await
+        {
+            warn!("Failed to delete schema cache for dump {}: {}", dump_id, e);
         }
 
         // Mark dump as DELETED in metadata
@@ -389,7 +425,10 @@ pub async fn cleanup_stale_uploads(
         .execute(db_pool)
         .await?;
 
-        info!("Successfully cleaned up stale uploaded dump: {}", dump_id);
+        info!(
+            "Successfully cleaned up stale dump: {} (was {})",
+            dump_id, status
+        );
         cleaned += 1;
     }
 

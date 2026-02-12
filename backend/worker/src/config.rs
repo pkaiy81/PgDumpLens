@@ -21,6 +21,8 @@ pub struct WorkerConfig {
     pub poll_interval_secs: u64,
     /// Cleanup interval in seconds (how often to check for expired dumps)
     pub cleanup_interval_secs: u64,
+    /// Stale dump timeout in minutes (for UPLOADED, ERROR, CREATED status)
+    pub stale_dump_timeout_mins: u64,
 }
 
 impl WorkerConfig {
@@ -44,6 +46,10 @@ impl WorkerConfig {
                 .unwrap_or_else(|_| "3600".to_string()) // Default: 1 hour
                 .parse()
                 .context("Invalid CLEANUP_INTERVAL_SECS")?,
+            stale_dump_timeout_mins: std::env::var("STALE_DUMP_TIMEOUT_MINS")
+                .unwrap_or_else(|_| "10".to_string()) // Default: 10 minutes
+                .parse()
+                .context("Invalid STALE_DUMP_TIMEOUT_MINS")?,
         })
     }
 
@@ -78,6 +84,7 @@ mod tests {
             upload_dir: "/data".to_string(),
             poll_interval_secs: 5,
             cleanup_interval_secs: 3600,
+            stale_dump_timeout_mins: 10,
         };
 
         assert_eq!(
@@ -97,6 +104,7 @@ mod tests {
             upload_dir: "/data".to_string(),
             poll_interval_secs: 5,
             cleanup_interval_secs: 3600,
+            stale_dump_timeout_mins: 10,
         };
 
         assert_eq!(

@@ -80,15 +80,15 @@ async fn main() -> anyhow::Result<()> {
                 }
             }
 
-            // Also cleanup stale uploads (UPLOADED status for more than 1 hour)
-            match jobs::cleanup_stale_uploads(&db_pool, &config).await {
+            // Also cleanup stale dumps (UPLOADED, ERROR, CREATED for more than configured timeout)
+            match jobs::cleanup_stale_dumps(&db_pool, &adapter, &config).await {
                 Ok(cleaned) => {
                     if cleaned > 0 {
-                        info!("Cleaned up {} stale uploaded dumps", cleaned);
+                        info!("Cleaned up {} stale dumps", cleaned);
                     }
                 }
                 Err(e) => {
-                    error!("Error during stale upload cleanup: {}", e);
+                    error!("Error during stale dump cleanup: {}", e);
                 }
             }
 
