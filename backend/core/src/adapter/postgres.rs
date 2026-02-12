@@ -972,8 +972,109 @@ impl DbAdapter for PostgresAdapter {
         self.create_database(db_name).await?;
 
         if is_custom_format {
-            // Custom format - use pg_restore with --exclude-table-data option
-            // This keeps the table schema but excludes the data (COPY statements)
+            // Custom format - use pg_restore with TOC filtering
+            // pg_restore doesn't have --exclude-table-data, so we use the -l/-L approach:
+            // 1. List TOC entries with pg_restore -l
+            // 2. Filter out DATA entries for excluded tables
+            // 3. Restore with filtered TOC using pg_restore -L
+
+            // Step 1: Get TOC listing
+            let mut list_cmd = Command::new("pg_restore");
+            list_cmd.arg("-l").arg(&actual_path);
+
+            if let Some(ref password) = self.password {
+                list_cmd.env("PGPASSWORD", password);
+            }
+
+            let list_output = list_cmd.output().map_err(|e| {
+                CoreError::RestoreFailed(format!("Failed to execute pg_restore -l: {}", e))
+            })?;
+
+            if !list_output.status.success() {
+                let stderr = String::from_utf8_lossy(&list_output.stderr);
+                return Err(CoreError::RestoreFailed(format!(
+                    "pg_restore -l failed: {}",
+                    stderr
+                )));
+            }
+
+            let toc_content = String::from_utf8_lossy(&list_output.stdout);
+
+            // Step 2: Filter TOC - remove DATA entries for excluded tables
+            // TOC lines look like:
+            //   3456; 0 16401 TABLE DATA public users postgres
+            let excluded_set: std::collections::HashSet<(String, String)> = excluded_tables
+                .iter()
+                .map(|t| {
+                    let parts: Vec<&str> = t.split('.').collect();
+                    if parts.len() == 2 {
+                        (parts[0].to_string(), parts[1].to_string())
+                    } else {
+                        ("public".to_string(), parts[0].to_string())
+                    }
+                })
+                .collect();
+
+            let mut filtered_toc = String::new();
+            let mut excluded_count = 0;
+            for line in toc_content.lines() {
+                let trimmed = line.trim();
+                // Comment lines or empty lines pass through
+                if trimmed.starts_with(';') || trimmed.is_empty() {
+                    filtered_toc.push_str(line);
+                    filtered_toc.push('\n');
+                    continue;
+                }
+
+                // Check if this is a TABLE DATA entry for an excluded table
+                // Format: "id; seq offset oid TYPE schema table owner"
+                // Example: "3456; 0 16401 TABLE DATA public users postgres"
+                let should_exclude = if trimmed.contains("TABLE DATA") {
+                    // Parse: split by whitespace, find schema and table after "TABLE DATA"
+                    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                    if let Some(td_pos) = parts
+                        .windows(2)
+                        .position(|w| w[0] == "TABLE" && w[1] == "DATA")
+                    {
+                        // schema is at td_pos+2, table at td_pos+3
+                        if parts.len() > td_pos + 3 {
+                            let schema = parts[td_pos + 2];
+                            let table = parts[td_pos + 3];
+                            excluded_set.contains(&(schema.to_string(), table.to_string()))
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                if should_exclude {
+                    // Comment out the line instead of removing it
+                    filtered_toc.push_str("; EXCLUDED: ");
+                    filtered_toc.push_str(line);
+                    filtered_toc.push('\n');
+                    excluded_count += 1;
+                } else {
+                    filtered_toc.push_str(line);
+                    filtered_toc.push('\n');
+                }
+            }
+
+            info!(
+                "Filtered TOC: excluded {} TABLE DATA entries for tables: {:?}",
+                excluded_count, excluded_tables
+            );
+
+            // Step 3: Write filtered TOC to a temp file
+            let toc_path = format!("{}.filtered_toc", actual_path);
+            std::fs::write(&toc_path, &filtered_toc).map_err(|e| {
+                CoreError::RestoreFailed(format!("Failed to write filtered TOC: {}", e))
+            })?;
+
+            // Step 4: Restore using filtered TOC
             let mut cmd = Command::new("pg_restore");
             cmd.args([
                 "-h",
@@ -987,14 +1088,9 @@ impl DbAdapter for PostgresAdapter {
                 "--no-owner",
                 "--no-privileges",
                 "--no-tablespaces",
+                "-L",
+                &toc_path,
             ]);
-
-            // Add exclusions for each table (data only, keep schema)
-            for table in excluded_tables {
-                // --exclude-table-data excludes only data, keeps table definition
-                cmd.arg("--exclude-table-data");
-                cmd.arg(table);
-            }
 
             cmd.arg(&actual_path);
 
@@ -1006,9 +1102,13 @@ impl DbAdapter for PostgresAdapter {
                 CoreError::RestoreFailed(format!("Failed to execute pg_restore: {}", e))
             })?;
 
+            // Clean up temp TOC file
+            let _ = std::fs::remove_file(&toc_path);
+
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let is_fatal = stderr.contains("FATAL")
+                    || stderr.contains("unrecognized")
                     || (stderr.contains("ERROR")
                         && !stderr.contains("tablespace")
                         && !stderr.contains("transaction_timeout")
