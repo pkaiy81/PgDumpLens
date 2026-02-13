@@ -17,6 +17,10 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en">
+      <head>
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.svg" />
+      </head>
       <body className={inter.className}>
         <div className="min-h-screen">
           <header className="bg-white/80 dark:bg-slate-900/80 backdrop-blur-md border-b border-slate-200 dark:border-slate-700 sticky top-0 z-50">
@@ -33,7 +37,7 @@ export default function RootLayout({
                       PgDumpLens
                     </span>
                     <span className="text-xs text-slate-400 dark:text-slate-500 font-medium">
-                      v1.0.0
+                      v1.1.0
                     </span>
                   </div>
                 </Link>
