@@ -58,6 +58,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        CARGO_REGISTRY: ${CARGO_REGISTRY:-}
     container_name: pgdumplens-api
     command: ["/app/api-server"]
     environment:
@@ -89,6 +91,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
+      args:
+        CARGO_REGISTRY: ${CARGO_REGISTRY:-}
     container_name: pgdumplens-worker
     command: ["/app/worker"]
     environment:
@@ -118,6 +122,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-}
+        NPM_AUTH_TOKEN: ${NPM_AUTH_TOKEN:-}
     container_name: pgdumplens-frontend
     environment:
       API_URL: http://api:8080

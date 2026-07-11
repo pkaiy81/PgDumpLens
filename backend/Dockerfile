@@ -1,9 +1,24 @@
+# Base and runtime images can be overridden to pull from an internal Docker proxy.
+ARG BASE_IMAGE=rust:1.92-alpine
+ARG RUNTIME_IMAGE=alpine:3.19
+
 # Build stage
-FROM rust:1.92-alpine AS builder
+FROM ${BASE_IMAGE} AS builder
 
 RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static pkgconf
 
 WORKDIR /app
+
+# Optional internal cargo registry (e.g. JFrog Artifactory) via source
+# replacement. When unset, crates.io is used and behavior is unchanged.
+# Example: sparse+https://mycompany.jfrog.io/artifactory/api/cargo/crates-remote/index/
+# This MUST run before the first (dependency-caching) cargo build below.
+ARG CARGO_REGISTRY=
+RUN if [ -n "$CARGO_REGISTRY" ]; then \
+      mkdir -p "$CARGO_HOME" && \
+      printf '[source.crates-io]\nreplace-with = "internal"\n\n[source.internal]\nregistry = "%s"\n' "$CARGO_REGISTRY" \
+        >> "$CARGO_HOME/config.toml"; \
+    fi
 
 # Copy manifests
 COPY Cargo.toml Cargo.lock ./
@@ -31,7 +46,7 @@ RUN touch core/src/lib.rs api/src/main.rs worker/src/main.rs && \
     cargo build --release --bin api-server --bin worker
 
 # Runtime stage
-FROM alpine:3.19 AS runtime
+FROM ${RUNTIME_IMAGE} AS runtime
 
 RUN apk add --no-cache ca-certificates libgcc postgresql-client
 

@@ -170,6 +170,41 @@ yarn install && yarn dev
 
 アプリが <http://localhost:3000> で起動します。
 
+## 🏢 社内 Artifactory 経由でのビルド
+
+社内環境で npm / cargo の依存取得を JFrog Artifactory などの内部レジストリ（プロキシ）経由に切り替えられます。**変数を設定しなければ公式レジストリを使い、挙動は一切変わりません。**
+
+### Docker Compose 利用時
+
+`.env`（`.env.example` を参照）に以下を設定してからビルドします:
+
+```bash
+# フロントエンド (Yarn Berry)
+NPM_REGISTRY=https://mycompany.jfrog.io/artifactory/api/npm/npm-remote/
+NPM_AUTH_TOKEN=            # 認証が必要な場合のみ
+
+# バックエンド (cargo sparse index)
+CARGO_REGISTRY=sparse+https://mycompany.jfrog.io/artifactory/api/cargo/crates-remote/index/
+```
+
+```bash
+docker compose build
+# または dev: docker compose -f docker-compose.dev.yml build
+```
+
+これらの値は各サービスの `build.args` に配線されており、`Dockerfile` 内で `yarn config set npmRegistryServer` / cargo の source replacement 設定に使われます。
+
+ベースイメージ自体も社内 Docker プロキシから取得する場合は、ビルド引数 `BASE_IMAGE`（および backend の `RUNTIME_IMAGE`）を上書きできます。
+
+### ローカル開発時（Docker 外）
+
+- **npm (Yarn):** `YARN_NPM_REGISTRY_SERVER` 環境変数を設定するか、`yarn config set npmRegistryServer <URL>` を実行してから `yarn install`。
+- **cargo:** `backend/.cargo/config.toml.example` を `backend/.cargo/config.toml` にコピーしてレジストリ URL を編集（実ファイルは gitignore 済み）。その後 `cargo build` / `cargo check`。
+
+### チェックサム不一致時の対処
+
+Artifactory が tarball を書き換える設定の場合、`yarn install --immutable` がチェックサム不一致で失敗することがあります。その場合は一時的に `YARN_CHECKSUM_BEHAVIOR=update` を設定してビルドしてください。cargo でトークン認証が必要な場合は `CARGO_REGISTRIES_*` 環境変数を利用します（anonymous read が使える構成を推奨）。
+
 ## 📁 プロジェクト構成
 
 ```bash

@@ -60,6 +60,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
+      args:
+        CARGO_REGISTRY: ${CARGO_REGISTRY:-}
     container_name: pgdumplens-api
     environment:
       DATABASE_URL: postgres://dbviewer:dbviewer_dev@metadata-db:5432/dbviewer_metadata
@@ -95,6 +97,8 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile.dev
+      args:
+        CARGO_REGISTRY: ${CARGO_REGISTRY:-}
     container_name: pgdumplens-worker
     environment:
       DATABASE_URL: postgres://dbviewer:dbviewer_dev@metadata-db:5432/dbviewer_metadata
@@ -128,6 +132,9 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile.dev
+      args:
+        NPM_REGISTRY: ${NPM_REGISTRY:-}
+        NPM_AUTH_TOKEN: ${NPM_AUTH_TOKEN:-}
     container_name: pgdumplens-frontend
     environment:
       API_URL: http://api:8080/api/:path*
