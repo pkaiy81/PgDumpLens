@@ -151,14 +151,9 @@ export function DataTable({ dumpId, schema, table, database, columnRelations, on
   // Copy data as CSV
   const copyAsCSV = useCallback(async () => {
     if (!data) return;
-    // Compute filtered rows inline
-    const rows = activeFilter?.value
-      ? data.rows.filter((row) => {
-          const cellValue = formatCellValue(row[activeFilter.column]);
-          return cellValue.toLowerCase().includes(activeFilter.value.toLowerCase());
-        })
-      : data.rows;
-    
+    // Rows are already filtered server-side.
+    const rows = data.rows;
+
     let csv: string;
     if (isTransposed) {
       // Transposed: columns become rows, each row becomes a column
@@ -195,19 +190,14 @@ export function DataTable({ dumpId, schema, table, database, columnRelations, on
       setCopySuccess('CSV');
       setTimeout(() => setCopySuccess(null), 2000);
     }
-  }, [data, activeFilter, copyToClipboard, isTransposed]);
+  }, [data, copyToClipboard, isTransposed]);
 
   // Copy data as JSON
   const copyAsJSON = useCallback(async () => {
     if (!data) return;
-    // Compute filtered rows inline
-    const rows = activeFilter?.value
-      ? data.rows.filter((row) => {
-          const cellValue = formatCellValue(row[activeFilter.column]);
-          return cellValue.toLowerCase().includes(activeFilter.value.toLowerCase());
-        })
-      : data.rows;
-    
+    // Rows are already filtered server-side.
+    const rows = data.rows;
+
     let jsonData: unknown;
     if (isTransposed) {
       // Transposed: structure as { column: [row1val, row2val, ...] }
@@ -225,7 +215,7 @@ export function DataTable({ dumpId, schema, table, database, columnRelations, on
       setCopySuccess('JSON');
       setTimeout(() => setCopySuccess(null), 2000);
     }
-  }, [data, activeFilter, copyToClipboard, isTransposed]);
+  }, [data, copyToClipboard, isTransposed]);
 
   // Copy single cell value
   const copyCellValue = useCallback(async (value: unknown) => {
@@ -237,6 +227,12 @@ export function DataTable({ dumpId, schema, table, database, columnRelations, on
     }
   }, [copyToClipboard]);
 
+  // Only an *applied* (non-empty) filter drives the server request. Merely
+  // opening a column's filter dropdown sets an empty value, which normalizes to
+  // the same key as "no filter" so it does not trigger a refetch.
+  const filterValue = activeFilter?.value ? activeFilter.value : '';
+  const filterColumn = activeFilter?.value ? activeFilter.column : '';
+
   useEffect(() => {
     const fetchData = async () => {
       setLoading(true);
@@ -245,6 +241,9 @@ export function DataTable({ dumpId, schema, table, database, columnRelations, on
         let url = `/api/dumps/${dumpId}/tables/${table}?schema=${encodeURIComponent(schema)}&limit=${pageSize}&offset=${page * pageSize}`;
         if (database) {
           url += `&database=${encodeURIComponent(database)}`;
+        }
+        if (filterValue) {
+          url += `&filter=${encodeURIComponent(filterValue)}&filter_column=${encodeURIComponent(filterColumn)}`;
         }
         const res = await fetch(url);
         if (!res.ok) {
@@ -260,7 +259,7 @@ export function DataTable({ dumpId, schema, table, database, columnRelations, on
     };
 
     fetchData();
-  }, [dumpId, schema, table, database, page]);
+  }, [dumpId, schema, table, database, page, filterValue, filterColumn]);
 
   if (loading) {
     return (
@@ -282,18 +281,9 @@ export function DataTable({ dumpId, schema, table, database, columnRelations, on
     );
   }
 
-  // Apply client-side filter
-  const filteredRows = activeFilter?.value
-    ? data.rows.filter((row) => {
-        const cellValue = formatCellValue(row[activeFilter.column]);
-        return cellValue.toLowerCase().includes(activeFilter.value.toLowerCase());
-      })
-    : data.rows;
-
-  const totalPages = Math.ceil((activeFilter?.value ? filteredRows.length : data.total_count) / pageSize);
-  const displayedRows = activeFilter?.value
-    ? filteredRows.slice(page * pageSize, (page + 1) * pageSize)
-    : filteredRows;
+  // Rows come pre-filtered and paginated from the server.
+  const displayedRows = data.rows;
+  const totalPages = Math.ceil(data.total_count / pageSize);
 
   return (
     <div>
@@ -312,7 +302,7 @@ export function DataTable({ dumpId, schema, table, database, columnRelations, on
               >
                 ✕
               </button>
-              <span className="text-slate-500 ml-1">({filteredRows.length} matches)</span>
+              <span className="text-slate-500 ml-1">({data.total_count} matches)</span>
             </span>
           )}
         </div>
@@ -622,7 +612,7 @@ export function DataTable({ dumpId, schema, table, database, columnRelations, on
   );
 }
 
-function formatCellValue(value: unknown): string {
+export function formatCellValue(value: unknown): string {
   if (value === null || value === undefined) {
     return 'NULL';
   }
