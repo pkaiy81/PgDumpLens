@@ -10,41 +10,25 @@ use sqlx::Row;
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
+use crate::handlers::sandbox::{
+    build_sandbox_url, extract_original_db_name, find_sandbox_db_name, resolve_sandbox_db,
+};
 use crate::state::AppState;
 use db_viewer_core::domain::SchemaGraph;
 use db_viewer_core::schema::generate_mermaid_er;
 
-/// Extract the original database name from a sandbox database name
-///
-/// Prefixed format: sandbox_{uuid_with_underscores}_{original_db_name} -> original_db_name
-/// Non-prefixed format: original_db_name -> original_db_name
-fn extract_original_db_name(sandbox_name: &str) -> String {
-    if sandbox_name.starts_with("sandbox_") {
-        // Format: sandbox_{uuid_with_underscores}_{db_name}
-        // UUID format: xxxxxxxx_xxxx_xxxx_xxxx_xxxxxxxxxxxx (36 chars with underscores)
-        // Total prefix: "sandbox_" (8) + uuid (36) + "_" (1) = 45 chars
-        if sandbox_name.len() > 45 && sandbox_name.chars().nth(44) == Some('_') {
-            return sandbox_name[45..].to_string();
-        }
-    }
-    sandbox_name.to_string()
+/// Quote a SQL identifier safely by wrapping it in double quotes and escaping
+/// any embedded double quotes.
+fn quote_ident(s: &str) -> String {
+    format!("\"{}\"", s.replace('"', "\"\""))
 }
 
-/// Find sandbox database name for a given user-friendly database name
-///
-/// Searches through sandbox_databases to find one that matches the original name.
-fn find_sandbox_db_name(
-    sandbox_databases: &Option<Vec<String>>,
-    user_db_name: &str,
-) -> Option<String> {
-    if let Some(dbs) = sandbox_databases {
-        let suffix = format!("_{}", user_db_name);
-        dbs.iter()
-            .find(|db| db.ends_with(&suffix) || *db == user_db_name)
-            .cloned()
-    } else {
-        None
-    }
+/// Escape a value for use inside a `LIKE` / `ILIKE` pattern so that `%`, `_`
+/// and `\` are treated literally (used together with `ESCAPE '\'`).
+fn escape_like(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 /// Get schema response
@@ -157,12 +141,15 @@ pub async fn get_schema(
 
 /// Table data query parameters
 #[derive(Debug, Deserialize)]
-#[allow(dead_code)]
 pub struct TableDataQuery {
     pub schema: Option<String>,
     pub limit: Option<usize>,
     pub offset: Option<usize>,
+    /// Case-insensitive substring filter applied server-side (SQL `ILIKE`).
     pub filter: Option<String>,
+    /// Optional column to restrict the filter to. When omitted, the filter is
+    /// applied across all columns (free-text search).
+    pub filter_column: Option<String>,
     /// Optional database name for pg_dumpall dumps with multiple databases
     pub database: Option<String>,
 }
@@ -177,6 +164,8 @@ pub struct TableDataResponse {
     pub total_count: i64,
     pub limit: usize,
     pub offset: usize,
+    /// Echo of the applied filter (if any).
+    pub filter: Option<String>,
 }
 
 /// Get table data
@@ -196,78 +185,13 @@ pub async fn get_table_data(
     };
 
     // Get sandbox database name - use query.database if specified, otherwise fallback to sandbox_db_name
-    let dump_row =
-        sqlx::query("SELECT sandbox_db_name, sandbox_databases FROM dumps WHERE id = $1")
-            .bind(id)
-            .fetch_optional(&state.db_pool)
-            .await?;
-
-    let sandbox_db: String = match dump_row {
-        Some(row) => {
-            let primary_db: Option<String> = row.get("sandbox_db_name");
-            let available_dbs: Option<Vec<String>> = row.get("sandbox_databases");
-
-            // Use query parameter if provided, otherwise default to primary
-            if let Some(ref user_db) = query.database {
-                // Find the sandbox database name for the user-friendly name
-                find_sandbox_db_name(&available_dbs, user_db)
-                    .or_else(|| {
-                        primary_db.as_ref().and_then(|pdb| {
-                            if pdb == user_db || extract_original_db_name(pdb) == *user_db {
-                                Some(pdb.clone())
-                            } else {
-                                None
-                            }
-                        })
-                    })
-                    .ok_or_else(|| {
-                        let friendly_names: Vec<String> = available_dbs
-                            .as_ref()
-                            .map(|dbs| dbs.iter().map(|d| extract_original_db_name(d)).collect())
-                            .unwrap_or_else(|| {
-                                primary_db
-                                    .iter()
-                                    .map(|p| extract_original_db_name(p))
-                                    .collect()
-                            });
-                        ApiError::BadRequest(format!(
-                            "Database '{}' is not available for this dump. Available: {:?}",
-                            user_db, friendly_names
-                        ))
-                    })?
-            } else {
-                // No database specified - use first available or primary
-                available_dbs
-                    .and_then(|dbs| dbs.first().cloned())
-                    .or(primary_db)
-                    .ok_or_else(|| ApiError::BadRequest("Dump not restored yet".to_string()))?
-            }
-        }
-        None => return Err(ApiError::NotFound(format!("Dump {} not found", id))),
-    };
+    let sandbox_db = resolve_sandbox_db(&state.db_pool, id, query.database.as_deref()).await?;
 
     let limit = query.limit.unwrap_or(50).min(1000);
     let offset = query.offset.unwrap_or(0);
 
     // Connect to sandbox and fetch data
-    let sandbox_url = if let Some(ref password) = state.config.sandbox_password {
-        format!(
-            "postgres://{}:{}@{}:{}/{}",
-            state.config.sandbox_user,
-            password,
-            state.config.sandbox_host,
-            state.config.sandbox_port,
-            sandbox_db
-        )
-    } else {
-        format!(
-            "postgres://{}@{}:{}/{}",
-            state.config.sandbox_user,
-            state.config.sandbox_host,
-            state.config.sandbox_port,
-            sandbox_db
-        )
-    };
+    let sandbox_url = build_sandbox_url(&state.config, &sandbox_db);
 
     let sandbox_pool = sqlx::postgres::PgPool::connect(&sandbox_url)
         .await
@@ -297,17 +221,62 @@ pub async fn get_table_data(
         )));
     }
 
-    // Get total count
-    let count_query = format!("SELECT COUNT(*) as cnt FROM \"{}\".\"{}\"", schema, table);
-    let count_row = sqlx::query(&count_query).fetch_one(&sandbox_pool).await?;
+    // Build an optional WHERE clause for server-side filtering. The filter value
+    // is always bound as $1 (never interpolated) so it is safe against quotes;
+    // identifiers are quoted via `quote_ident`.
+    let filter_value = query
+        .filter
+        .as_deref()
+        .map(str::trim)
+        .filter(|f| !f.is_empty());
+
+    let where_clause = if filter_value.is_some() {
+        if let Some(ref col) = query.filter_column {
+            if !columns.iter().any(|c| c == col) {
+                return Err(ApiError::BadRequest(format!(
+                    "Filter column '{}' does not exist in table {}.{}",
+                    col, schema, table
+                )));
+            }
+            format!("WHERE t.{}::text ILIKE $1 ESCAPE '\\'", quote_ident(col))
+        } else {
+            // Free-text search across all columns
+            let conditions: Vec<String> = columns
+                .iter()
+                .map(|c| format!("t.{}::text ILIKE $1 ESCAPE '\\'", quote_ident(c)))
+                .collect();
+            format!("WHERE ({})", conditions.join(" OR "))
+        }
+    } else {
+        String::new()
+    };
+
+    let bind_pattern = filter_value.map(|f| format!("%{}%", escape_like(f)));
+
+    let table_ref = format!("{}.{}", quote_ident(&schema), quote_ident(&table));
+
+    // Get total count (with the same filter applied)
+    let count_query = format!(
+        "SELECT COUNT(*) as cnt FROM {} t {}",
+        table_ref, where_clause
+    );
+    let mut count_q = sqlx::query(&count_query);
+    if let Some(ref pattern) = bind_pattern {
+        count_q = count_q.bind(pattern);
+    }
+    let count_row = count_q.fetch_one(&sandbox_pool).await?;
     let total_count: i64 = count_row.get("cnt");
 
-    // Fetch rows
+    // Fetch rows (limit/offset are clamped usize values, safe to interpolate)
     let data_query = format!(
-        "SELECT to_jsonb(t.*) as row_data FROM \"{}\".\"{}\" t LIMIT {} OFFSET {}",
-        schema, table, limit, offset
+        "SELECT to_jsonb(t.*) as row_data FROM {} t {} LIMIT {} OFFSET {}",
+        table_ref, where_clause, limit, offset
     );
-    let rows: Vec<serde_json::Value> = sqlx::query(&data_query)
+    let mut data_q = sqlx::query(&data_query);
+    if let Some(ref pattern) = bind_pattern {
+        data_q = data_q.bind(pattern);
+    }
+    let rows: Vec<serde_json::Value> = data_q
         .fetch_all(&sandbox_pool)
         .await?
         .iter()
@@ -322,6 +291,7 @@ pub async fn get_table_data(
         total_count,
         limit,
         offset,
+        filter: filter_value.map(|f| f.to_string()),
     }))
 }
 
@@ -371,24 +341,7 @@ pub async fn suggest_values(
         None => return Err(ApiError::NotFound(format!("Dump {} not found", id))),
     };
 
-    let sandbox_url = if let Some(ref password) = state.config.sandbox_password {
-        format!(
-            "postgres://{}:{}@{}:{}/{}",
-            state.config.sandbox_user,
-            password,
-            state.config.sandbox_host,
-            state.config.sandbox_port,
-            sandbox_db
-        )
-    } else {
-        format!(
-            "postgres://{}@{}:{}/{}",
-            state.config.sandbox_user,
-            state.config.sandbox_host,
-            state.config.sandbox_port,
-            sandbox_db
-        )
-    };
+    let sandbox_url = build_sandbox_url(&state.config, &sandbox_db);
 
     let sandbox_pool = sqlx::postgres::PgPool::connect(&sandbox_url)
         .await
@@ -467,5 +420,29 @@ mod tests {
         };
         assert_eq!(schema, "public");
         assert_eq!(table, "users");
+    }
+
+    #[test]
+    fn test_quote_ident_plain() {
+        assert_eq!(quote_ident("users"), "\"users\"");
+    }
+
+    #[test]
+    fn test_quote_ident_embedded_quote() {
+        // A double quote inside the identifier must be doubled.
+        assert_eq!(quote_ident("we\"ird"), "\"we\"\"ird\"");
+    }
+
+    #[test]
+    fn test_escape_like_special_chars() {
+        assert_eq!(escape_like("100%"), "100\\%");
+        assert_eq!(escape_like("a_b"), "a\\_b");
+        assert_eq!(escape_like("back\\slash"), "back\\\\slash");
+    }
+
+    #[test]
+    fn test_escape_like_backslash_first() {
+        // Backslash must be escaped before % and _ to avoid double-escaping.
+        assert_eq!(escape_like("\\%"), "\\\\\\%");
     }
 }
