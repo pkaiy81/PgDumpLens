@@ -60,6 +60,15 @@ pub fn create_router(state: AppState) -> Router {
             get(handlers::schema::suggest_values),
         )
         .route("/api/dumps/:id/query", post(handlers::query::execute_query))
+        // Interactive psql-like console
+        .route(
+            "/api/dumps/:id/console",
+            post(handlers::console::create_session),
+        )
+        .route(
+            "/api/console/:session_id",
+            post(handlers::console::execute).delete(handlers::console::close_session),
+        )
         // Diff comparison
         .route(
             "/api/dumps/:base_id/compare/:compare_id",

@@ -7,6 +7,7 @@ mod routes;
 mod state;
 
 use std::net::SocketAddr;
+use std::time::Duration;
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -29,6 +30,20 @@ async fn main() -> anyhow::Result<()> {
 
     // Create application state
     let state = state::AppState::new(&config).await?;
+
+    // Spawn the idle console-session sweeper.
+    let sessions = state.console_sessions.clone();
+    tokio::spawn(async move {
+        let mut tick = tokio::time::interval(Duration::from_secs(
+            handlers::console::session::SWEEP_INTERVAL_SECS,
+        ));
+        loop {
+            tick.tick().await;
+            for s in sessions.sweep_idle() {
+                handlers::console::session::close_session(s).await;
+            }
+        }
+    });
 
     // Build router
     let app = routes::create_router(state);

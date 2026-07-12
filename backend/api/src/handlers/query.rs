@@ -67,7 +67,7 @@ pub struct QueryResponse {
 
 /// Return the first meaningful SQL keyword, uppercased, skipping leading
 /// whitespace and `--` line / `/* */` block comments.
-fn first_keyword(sql: &str) -> String {
+pub(crate) fn first_keyword(sql: &str) -> String {
     let bytes = sql.as_bytes();
     let mut i = 0;
     let n = bytes.len();
