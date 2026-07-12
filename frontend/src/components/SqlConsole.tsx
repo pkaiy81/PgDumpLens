@@ -1,22 +1,45 @@
 'use client';
 
-import { useState, useCallback, useEffect } from 'react';
-import { formatCellValue } from './DataTable';
+import { useState, useCallback, useEffect, useRef } from 'react';
 
 interface SqlConsoleProps {
   dumpId: string;
   database?: string;
 }
 
-interface QueryResult {
-  kind: 'rows' | 'command';
-  columns: string[];
-  rows: Record<string, unknown>[];
-  row_count: number;
-  truncated: boolean;
-  rows_affected: number | null;
+/** A structured output block returned by the console API. */
+type Block =
+  | {
+      type: 'table';
+      columns: string[];
+      rows: (string | null)[][];
+      footer?: string | null;
+      expanded: boolean;
+    }
+  | { type: 'text'; text: string }
+  | { type: 'error'; text: string }
+  | { type: 'notice'; text: string };
+
+interface ExecuteResponse {
+  blocks: Block[];
+  database: string;
+  prompt: string;
+  expanded: boolean;
+  timing: boolean;
+  session_ended: boolean;
   execution_ms: number;
 }
+
+interface CreateSessionResponse {
+  session_id: string;
+  database: string;
+  prompt: string;
+}
+
+/** A single line in the terminal scrollback: an echoed input or an output block. */
+type TermEntry =
+  | { kind: 'input'; prompt: string; text: string }
+  | { kind: 'block'; block: Block };
 
 interface HistoryEntry {
   sql: string;
@@ -24,6 +47,7 @@ interface HistoryEntry {
 }
 
 const HISTORY_LIMIT = 50;
+const MAX_ENTRIES = 500;
 
 function historyKey(dumpId: string): string {
   return `pgdumplens:sql-history:${dumpId}`;
@@ -53,199 +77,518 @@ function saveHistory(dumpId: string, entries: HistoryEntry[]): void {
   }
 }
 
-export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
-  const [sql, setSql] = useState('');
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [result, setResult] = useState<QueryResult | null>(null);
-  const [history, setHistory] = useState<HistoryEntry[]>([]);
-  const [showHistory, setShowHistory] = useState(false);
-
-  useEffect(() => {
-    setHistory(loadHistory(dumpId));
-  }, [dumpId]);
-
-  const pushHistory = useCallback(
-    (statement: string) => {
-      setHistory((prev) => {
-        const deduped = prev.filter((e) => e.sql !== statement);
-        const next = [{ sql: statement, at: Date.now() }, ...deduped].slice(
-          0,
-          HISTORY_LIMIT
-        );
-        saveHistory(dumpId, next);
-        return next;
-      });
-    },
-    [dumpId]
-  );
-
-  const runQuery = useCallback(async () => {
-    const trimmed = sql.trim();
-    if (!trimmed || running) return;
-
-    setRunning(true);
-    setError(null);
-    setResult(null);
-    try {
-      const res = await fetch(`/api/dumps/${dumpId}/query`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sql: trimmed, database }),
-      });
-      const json = await res.json().catch(() => null);
-      if (!res.ok) {
-        setError(
-          (json && typeof json.message === 'string' && json.message) ||
-            'Query failed'
-        );
-        return;
-      }
-      setResult(json as QueryResult);
-      pushHistory(trimmed);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Query failed');
-    } finally {
-      setRunning(false);
+/** Serialize a result table as CSV (NULL -> empty, RFC-4180 quoting). */
+export function tableToCsv(columns: string[], rows: (string | null)[][]): string {
+  const esc = (v: string | null): string => {
+    const s = v ?? '';
+    if (s.includes(',') || s.includes('\n') || s.includes('"')) {
+      return `"${s.replace(/"/g, '""')}"`;
     }
-  }, [sql, running, dumpId, database, pushHistory]);
+    return s;
+  };
+  const header = columns.map(esc).join(',');
+  if (rows.length === 0) return header;
+  const body = rows.map((r) => r.map(esc).join(',')).join('\n');
+  return `${header}\n${body}`;
+}
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
-      e.preventDefault();
-      runQuery();
+/** Serialize a result table as TSV (NULL -> empty) for spreadsheet paste. */
+export function tableToTsv(columns: string[], rows: (string | null)[][]): string {
+  const cell = (v: string | null): string =>
+    (v ?? '').replace(/\t/g, ' ').replace(/\r?\n/g, ' ');
+  const header = columns.map(cell).join('\t');
+  if (rows.length === 0) return header;
+  const body = rows.map((r) => r.map(cell).join('\t')).join('\n');
+  return `${header}\n${body}`;
+}
+
+/** Serialize a result table as pretty JSON (NULL -> null). */
+export function tableToJson(columns: string[], rows: (string | null)[][]): string {
+  const objs = rows.map((r) => {
+    const o: Record<string, string | null> = {};
+    columns.forEach((c, i) => {
+      o[c] = r[i] ?? null;
+    });
+    return o;
+  });
+  return JSON.stringify(objs, null, 2);
+}
+
+/** A rendered result table with hover copy buttons (CSV / TSV / JSON). */
+function TableBlock({
+  block,
+}: {
+  block: Extract<Block, { type: 'table' }>;
+}) {
+  const [copied, setCopied] = useState<string | null>(null);
+
+  const doCopy = async (fmt: 'CSV' | 'TSV' | 'JSON') => {
+    const text =
+      fmt === 'CSV'
+        ? tableToCsv(block.columns, block.rows)
+        : fmt === 'TSV'
+        ? tableToTsv(block.columns, block.rows)
+        : tableToJson(block.columns, block.rows);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(fmt);
+      setTimeout(() => setCopied(null), 1500);
+    } catch {
+      // Clipboard unavailable; silently ignore.
     }
   };
 
   return (
-    <div className="space-y-4">
-      {/* Warning banner */}
-      <div className="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 px-4 py-3 text-sm text-amber-800 dark:text-amber-200">
-        Queries run against a disposable sandbox. Writes and DDL are allowed and
-        affect only this sandbox. One statement per run.
+    <div className="group relative my-1">
+      <div className="absolute right-0 top-0 z-10 hidden items-center gap-2 group-hover:flex">
+        {copied && (
+          <span className="text-xs text-emerald-400">Copied!</span>
+        )}
+        <button
+          type="button"
+          onClick={() => doCopy('CSV')}
+          className="text-xs text-slate-500 hover:text-slate-200"
+        >
+          Copy CSV
+        </button>
+        <button
+          type="button"
+          onClick={() => doCopy('TSV')}
+          className="text-xs text-slate-500 hover:text-slate-200"
+        >
+          Copy TSV
+        </button>
+        <button
+          type="button"
+          onClick={() => doCopy('JSON')}
+          className="text-xs text-slate-500 hover:text-slate-200"
+        >
+          Copy JSON
+        </button>
       </div>
 
-      {/* Editor */}
-      <div>
-        <textarea
-          value={sql}
-          onChange={(e) => setSql(e.target.value)}
-          onKeyDown={handleKeyDown}
-          rows={8}
-          spellCheck={false}
-          placeholder="SELECT * FROM ...   (Ctrl/Cmd+Enter to run — one statement per run)"
-          className="w-full font-mono text-sm px-3 py-2 rounded-lg border border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-slate-100 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
-        />
-        <div className="mt-2 flex items-center gap-3">
-          <button
-            onClick={runQuery}
-            disabled={running || !sql.trim()}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {running && (
-              <span className="animate-spin w-4 h-4 border-2 border-white/40 border-t-white rounded-full" />
-            )}
-            {running ? 'Running...' : 'Run'}
-          </button>
-          <span className="text-xs text-slate-400">Ctrl/Cmd+Enter</span>
-          {history.length > 0 && (
-            <button
-              onClick={() => setShowHistory((v) => !v)}
-              className="ml-auto text-sm text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
-            >
-              {showHistory ? 'Hide' : 'Show'} history ({history.length})
-            </button>
-          )}
-        </div>
-      </div>
-
-      {/* History */}
-      {showHistory && history.length > 0 && (
-        <div className="rounded-lg border border-slate-200 dark:border-slate-700 divide-y divide-slate-100 dark:divide-slate-700 max-h-56 overflow-y-auto">
-          {history.map((entry, i) => (
-            <button
-              key={`${entry.at}-${i}`}
-              onClick={() => setSql(entry.sql)}
-              className="block w-full text-left px-3 py-2 text-xs font-mono truncate hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300"
-              title={entry.sql}
-            >
-              {entry.sql}
-            </button>
-          ))}
-        </div>
-      )}
-
-      {/* Error */}
-      {error && (
-        <div className="rounded-lg border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/30 px-4 py-3 text-sm text-red-700 dark:text-red-300 font-mono whitespace-pre-wrap">
-          {error}
-        </div>
-      )}
-
-      {/* Command result */}
-      {result && result.kind === 'command' && (
-        <div className="rounded-lg border border-green-300 dark:border-green-700 bg-green-50 dark:bg-green-900/30 px-4 py-3 text-sm text-green-700 dark:text-green-300">
-          {result.rows_affected ?? 0} row(s) affected ({result.execution_ms} ms)
-        </div>
-      )}
-
-      {/* Rows result */}
-      {result && result.kind === 'rows' && (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between text-sm text-slate-500 dark:text-slate-400">
-            <span>
-              {result.row_count} row{result.row_count === 1 ? '' : 's'}
-            </span>
-            <span>{result.execution_ms} ms</span>
-          </div>
-          {result.truncated && (
-            <div className="rounded-lg border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 px-4 py-2 text-sm text-amber-800 dark:text-amber-200">
-              Results were truncated to {result.row_count} rows. Use a smaller
-              query or LIMIT to see the rest.
-            </div>
-          )}
-          {result.columns.length > 0 ? (
-            <div className="overflow-x-auto">
-              <table className="data-table w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 dark:border-slate-700">
-                    {result.columns.map((col) => (
-                      <th
-                        key={col}
-                        className="text-left py-2 px-3 text-slate-500 dark:text-slate-400 font-medium whitespace-nowrap"
-                      >
-                        {col}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
+      {block.expanded ? (
+        <div>
+          {block.rows.map((row, ri) => (
+            <div key={ri} className="mb-1">
+              <div className="text-slate-400">{`-[ RECORD ${ri + 1} ]-`}</div>
+              <table className="border-collapse">
                 <tbody>
-                  {result.rows.map((row, rowIdx) => (
-                    <tr
-                      key={rowIdx}
-                      className="border-b border-slate-100 dark:border-slate-700/50 hover:bg-slate-50 dark:hover:bg-slate-700/50"
-                    >
-                      {result.columns.map((col) => (
-                        <td
-                          key={col}
-                          className="py-2 px-3 font-mono text-xs whitespace-nowrap max-w-xs truncate"
-                          title={formatCellValue(row[col])}
-                        >
-                          {formatCellValue(row[col])}
-                        </td>
-                      ))}
+                  {block.columns.map((col, ci) => (
+                    <tr key={ci}>
+                      <td className="whitespace-pre px-3 align-top font-semibold">
+                        {col}
+                      </td>
+                      <td className="whitespace-pre border-l border-slate-700 px-3 align-top">
+                        {row[ci] ?? ''}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
-          ) : (
-            <div className="text-slate-500 dark:text-slate-400 py-4 text-center">
-              No rows returned
-            </div>
-          )}
+          ))}
         </div>
+      ) : (
+        <table className="border-collapse">
+          <thead>
+            <tr>
+              {block.columns.map((col, ci) => (
+                <th
+                  key={ci}
+                  className={`border-b border-slate-600 px-3 text-left font-semibold ${
+                    ci > 0 ? 'border-l border-slate-700' : ''
+                  }`}
+                >
+                  {col}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {block.rows.map((row, ri) => (
+              <tr key={ri}>
+                {block.columns.map((_, ci) => (
+                  <td
+                    key={ci}
+                    className={`whitespace-pre px-3 align-top ${
+                      ci > 0 ? 'border-l border-slate-700' : ''
+                    }`}
+                  >
+                    {row[ci] ?? ''}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
       )}
+
+      {block.footer && <div className="text-slate-400">{block.footer}</div>}
+    </div>
+  );
+}
+
+export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
+  const [entries, setEntries] = useState<TermEntry[]>([]);
+  const [buffer, setBuffer] = useState<string[]>([]);
+  const [input, setInput] = useState('');
+  const [running, setRunning] = useState(false);
+  const [db, setDb] = useState(database ?? 'sandbox');
+  const [historyIndex, setHistoryIndex] = useState(-1);
+
+  const sessionIdRef = useRef<string | null>(null);
+  const historyRef = useRef<HistoryEntry[]>([]);
+  const draftRef = useRef('');
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const appendEntries = useCallback((items: TermEntry[]) => {
+    setEntries((prev) => {
+      const next = [...prev, ...items];
+      return next.length > MAX_ENTRIES ? next.slice(next.length - MAX_ENTRIES) : next;
+    });
+  }, []);
+
+  const appendBlocks = useCallback(
+    (blocks: Block[]) => {
+      appendEntries(blocks.map((block) => ({ kind: 'block', block })));
+    },
+    [appendEntries]
+  );
+
+  const pushHistory = useCallback(
+    (statement: string) => {
+      const deduped = historyRef.current.filter((e) => e.sql !== statement);
+      const next = [{ sql: statement, at: Date.now() }, ...deduped].slice(
+        0,
+        HISTORY_LIMIT
+      );
+      historyRef.current = next;
+      saveHistory(dumpId, next);
+    },
+    [dumpId]
+  );
+
+  // Create a new session, updating the session ref and prompt. Returns the
+  // session id and connected database name, or null on failure.
+  const createSession = useCallback(async (): Promise<{
+    id: string;
+    database: string;
+  } | null> => {
+    try {
+      const res = await fetch(`/api/dumps/${dumpId}/console`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ database: database ?? undefined }),
+      });
+      const json = (await res.json().catch(() => null)) as CreateSessionResponse | null;
+      if (!res.ok || !json) return null;
+      sessionIdRef.current = json.session_id;
+      setDb(json.database);
+      return { id: json.session_id, database: json.database };
+    } catch {
+      return null;
+    }
+  }, [dumpId, database]);
+
+  // Session lifecycle: (re)create on dumpId/database change, tear down on unmount.
+  useEffect(() => {
+    let cancelled = false;
+    setEntries([]);
+    setBuffer([]);
+    setInput('');
+    setHistoryIndex(-1);
+    sessionIdRef.current = null;
+    historyRef.current = loadHistory(dumpId);
+
+    (async () => {
+      const created = await createSession();
+      if (cancelled) return;
+      if (!created) {
+        appendBlocks([
+          { type: 'error', text: 'Failed to start console session.' },
+        ]);
+        return;
+      }
+      appendEntries([
+        {
+          kind: 'block',
+          block: {
+            type: 'notice',
+            text: 'PgDumpLens console — psql-like sandbox terminal. Type \\? for help.',
+          },
+        },
+        {
+          kind: 'block',
+          block: {
+            type: 'notice',
+            text: `You are connected to database "${created.database}".`,
+          },
+        },
+      ]);
+    })();
+
+    return () => {
+      cancelled = true;
+      const sid = sessionIdRef.current;
+      if (sid) {
+        // sendBeacon cannot issue DELETE; keepalive fetch survives unload.
+        fetch(`/api/console/${sid}`, {
+          method: 'DELETE',
+          keepalive: true,
+        }).catch(() => {});
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [dumpId, database]);
+
+  // Auto-scroll to the newest line.
+  useEffect(() => {
+    if (scrollRef.current) {
+      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    }
+  }, [entries]);
+
+  const postInput = async (
+    sid: string,
+    text: string
+  ): Promise<{ status: number; ok: boolean; json: ExecuteResponse | null }> => {
+    const res = await fetch(`/api/console/${sid}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ input: text }),
+    });
+    const json = (await res.json().catch(() => null)) as ExecuteResponse | null;
+    return { status: res.status, ok: res.ok, json };
+  };
+
+  const submit = useCallback(
+    async (text: string) => {
+      pushHistory(text);
+      setRunning(true);
+      try {
+        let sid = sessionIdRef.current;
+        if (sid === null) {
+          const created = await createSession();
+          if (created === null) {
+            appendBlocks([
+              { type: 'error', text: 'No active console session.' },
+            ]);
+            return;
+          }
+          sid = created.id;
+        }
+
+        let res = await postInput(sid, text);
+
+        // Session expired: recreate once, notify, and retry the same input.
+        if (res.status === 404) {
+          const created = await createSession();
+          if (created === null) {
+            appendBlocks([
+              { type: 'error', text: 'Console session not found or expired.' },
+            ]);
+            return;
+          }
+          appendBlocks([
+            { type: 'notice', text: 'Session expired — reconnected.' },
+          ]);
+          res = await postInput(created.id, text);
+          if (res.status === 404) {
+            appendBlocks([
+              { type: 'error', text: 'Console session not found or expired.' },
+            ]);
+            return;
+          }
+        }
+
+        if (res.status === 409) {
+          appendBlocks([
+            {
+              type: 'error',
+              text: 'Console session is busy — wait for the current command to finish.',
+            },
+          ]);
+          return;
+        }
+
+        if (!res.ok || !res.json) {
+          const message =
+            (res.json &&
+              (res.json as unknown as { message?: string }).message) ||
+            'Command failed.';
+          appendBlocks([{ type: 'error', text: message }]);
+          return;
+        }
+
+        appendBlocks(res.json.blocks);
+        setDb(res.json.database);
+        if (res.json.session_ended) {
+          sessionIdRef.current = null;
+          appendBlocks([
+            {
+              type: 'notice',
+              text: 'Session ended. A new session starts on your next command.',
+            },
+          ]);
+        }
+      } catch {
+        appendBlocks([{ type: 'error', text: 'Command failed.' }]);
+      } finally {
+        setRunning(false);
+      }
+    },
+    [pushHistory, createSession, appendBlocks]
+  );
+
+  const promptFor = (continuation: boolean): string =>
+    continuation ? `${db}-#` : `${db}=#`;
+
+  const handleEnter = () => {
+    if (running) return;
+    const line = input;
+    const echoPrompt = promptFor(buffer.length > 0);
+    appendEntries([{ kind: 'input', prompt: echoPrompt, text: line }]);
+    setInput('');
+    setHistoryIndex(-1);
+
+    // Meta-command: only when the buffer is empty and the line starts with `\`.
+    if (buffer.length === 0 && line.trimStart().startsWith('\\')) {
+      submit(line.trim());
+      return;
+    }
+
+    const nextBuffer = [...buffer, line];
+    if (line.trimEnd().endsWith(';')) {
+      setBuffer([]);
+      submit(nextBuffer.join('\n'));
+    } else {
+      setBuffer(nextBuffer);
+    }
+  };
+
+  const handleCtrlC = () => {
+    const echoPrompt = promptFor(buffer.length > 0);
+    appendEntries([{ kind: 'input', prompt: echoPrompt, text: `${input}^C` }]);
+    setInput('');
+    setBuffer([]);
+    setHistoryIndex(-1);
+  };
+
+  const navHistory = (dir: 1 | -1) => {
+    const hist = historyRef.current;
+    if (hist.length === 0) return;
+    if (dir === 1) {
+      // Older.
+      let idx = historyIndex;
+      if (idx === -1) {
+        draftRef.current = input;
+        idx = 0;
+      } else {
+        idx = Math.min(idx + 1, hist.length - 1);
+      }
+      setInput(hist[idx].sql);
+      setHistoryIndex(idx);
+    } else {
+      // Newer.
+      if (historyIndex === -1) return;
+      const idx = historyIndex - 1;
+      if (idx < 0) {
+        setInput(draftRef.current);
+        setHistoryIndex(-1);
+      } else {
+        setInput(hist[idx].sql);
+        setHistoryIndex(idx);
+      }
+    }
+  };
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleEnter();
+    } else if (e.key === 'c' && e.ctrlKey) {
+      e.preventDefault();
+      handleCtrlC();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      navHistory(1);
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      navHistory(-1);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      {/* Thin amber note. */}
+      <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-300">
+        Runs against a disposable sandbox. \? for help, statements end with ;
+      </div>
+
+      {/* Dark terminal panel. */}
+      <div
+        ref={scrollRef}
+        onClick={() => inputRef.current?.focus()}
+        className="h-[32rem] overflow-y-auto rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100"
+      >
+        {entries.map((entry, i) => {
+          if (entry.kind === 'input') {
+            return (
+              <div key={i} className="whitespace-pre-wrap">
+                <span className="mr-2 text-emerald-400">{entry.prompt}</span>
+                {entry.text}
+              </div>
+            );
+          }
+          const b = entry.block;
+          if (b.type === 'table') {
+            return <TableBlock key={i} block={b} />;
+          }
+          if (b.type === 'error') {
+            return (
+              <pre key={i} className="whitespace-pre-wrap text-red-400">
+                {b.text}
+              </pre>
+            );
+          }
+          if (b.type === 'notice') {
+            return (
+              <pre key={i} className="whitespace-pre-wrap text-slate-400">
+                {b.text}
+              </pre>
+            );
+          }
+          return (
+            <pre key={i} className="whitespace-pre">
+              {b.text}
+            </pre>
+          );
+        })}
+
+        {/* Prompt / input line. */}
+        <div className="flex items-start">
+          {running ? (
+            <span className="mr-2 text-slate-500">...</span>
+          ) : (
+            <span className="mr-2 text-emerald-400">
+              {promptFor(buffer.length > 0)}
+            </span>
+          )}
+          <input
+            ref={inputRef}
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyDown={onKeyDown}
+            disabled={running}
+            className="flex-1 border-none bg-transparent font-mono text-slate-100 outline-none"
+            autoFocus
+            spellCheck={false}
+            aria-label="Terminal input"
+          />
+        </div>
+      </div>
     </div>
   );
 }
