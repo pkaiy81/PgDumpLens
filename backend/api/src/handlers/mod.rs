@@ -1,5 +1,6 @@
 //! API handlers
 
+pub mod console;
 pub mod diff;
 pub mod dumps;
 pub mod query;
