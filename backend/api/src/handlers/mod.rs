@@ -2,8 +2,10 @@
 
 pub mod diff;
 pub mod dumps;
+pub mod query;
 pub mod relation;
 pub mod risk;
+pub mod sandbox;
 pub mod schema;
 pub mod search;
 

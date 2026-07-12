@@ -59,6 +59,7 @@ pub fn create_router(state: AppState) -> Router {
             "/api/dumps/:id/suggest",
             get(handlers::schema::suggest_values),
         )
+        .route("/api/dumps/:id/query", post(handlers::query::execute_query))
         // Diff comparison
         .route(
             "/api/dumps/:base_id/compare/:compare_id",

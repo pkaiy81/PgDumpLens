@@ -1,15 +1,30 @@
+# Base image can be overridden to pull from an internal Docker proxy.
+ARG BASE_IMAGE=node:20-alpine
+
 # Build stage
-FROM node:20-alpine AS builder
+FROM ${BASE_IMAGE} AS builder
 
 RUN corepack enable
 
 WORKDIR /app
 
+# Optional internal npm registry (e.g. JFrog Artifactory). When unset, the
+# official registry is used and behavior is unchanged.
+ARG NPM_REGISTRY=
+ARG NPM_AUTH_TOKEN=
+
 # Copy package files
 COPY package.json yarn.lock ./
 
-# Install dependencies (using node-modules linker for Docker compatibility)
-RUN yarn config set nodeLinker node-modules && yarn install --immutable
+# Install dependencies (using node-modules linker for Docker compatibility).
+# When NPM_REGISTRY is set, point Yarn Berry at it before installing.
+RUN yarn config set nodeLinker node-modules && \
+    if [ -n "$NPM_REGISTRY" ]; then \
+      yarn config set npmRegistryServer "$NPM_REGISTRY" && \
+      yarn config set unsafeHttpWhitelist --json "[\"$(echo "$NPM_REGISTRY" | sed -E 's|^https?://([^/:]+).*|\1|')\"]"; \
+    fi && \
+    if [ -n "$NPM_AUTH_TOKEN" ]; then yarn config set npmAuthToken "$NPM_AUTH_TOKEN"; fi && \
+    yarn install --immutable
 
 # Copy source code
 COPY . .
@@ -23,7 +38,7 @@ ENV API_URL=${API_URL}
 RUN yarn build
 
 # Production stage
-FROM node:20-alpine AS runner
+FROM ${BASE_IMAGE} AS runner
 
 WORKDIR /app
 

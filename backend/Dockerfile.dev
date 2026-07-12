@@ -1,7 +1,20 @@
+# Base image can be overridden to pull from an internal Docker proxy.
+ARG BASE_IMAGE=rust:1.92-alpine
+
 # Development Dockerfile for Rust backend with hot reload
-FROM rust:1.92-alpine
+FROM ${BASE_IMAGE}
 
 RUN apk add --no-cache musl-dev openssl-dev openssl-libs-static pkgconf postgresql-client
+
+# Optional internal cargo registry (e.g. JFrog Artifactory) via source
+# replacement. When unset, crates.io is used and behavior is unchanged.
+# This MUST run before any cargo command that fetches crates.
+ARG CARGO_REGISTRY=
+RUN if [ -n "$CARGO_REGISTRY" ]; then \
+      mkdir -p "$CARGO_HOME" && \
+      printf '[source.crates-io]\nreplace-with = "internal"\n\n[source.internal]\nregistry = "%s"\n' "$CARGO_REGISTRY" \
+        >> "$CARGO_HOME/config.toml"; \
+    fi
 
 # Install cargo-watch for hot reload
 RUN cargo install cargo-watch

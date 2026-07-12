@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { DataTable } from './DataTable';
 
 // Mock fetch
@@ -103,6 +103,62 @@ describe('DataTable', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Failed to load table data')).toBeInTheDocument();
+    });
+  });
+
+  it('sends filter params on the second fetch and reflects filtered count in badge', async () => {
+    mockFetch.mockImplementation((url: string) => {
+      if (typeof url === 'string' && url.includes('/suggest')) {
+        return Promise.resolve({ ok: true, json: async () => ({ suggestions: [] }) });
+      }
+      if (typeof url === 'string' && url.includes('filter=')) {
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({
+            columns: ['id', 'name'],
+            rows: [{ id: 1, name: 'Alice' }],
+            total_count: 1,
+          }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: async () => ({
+          columns: ['id', 'name'],
+          rows: [
+            { id: 1, name: 'Alice' },
+            { id: 2, name: 'Bob' },
+          ],
+          total_count: 2,
+        }),
+      });
+    });
+
+    render(<DataTable dumpId="123" schema="public" table="users" />);
+
+    await waitFor(() => expect(screen.getByText('Alice')).toBeInTheDocument());
+
+    // Open the filter dropdown for the "name" column.
+    fireEvent.click(screen.getByTitle('Filter by name'));
+
+    // Type a value and apply it with Enter.
+    const input = screen.getByPlaceholderText('Filter name...');
+    fireEvent.change(input, { target: { value: 'Alice' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+
+    // A follow-up fetch must include the server-side filter parameters.
+    await waitFor(() => {
+      const filterCall = mockFetch.mock.calls.find(
+        (c) => typeof c[0] === 'string' && c[0].includes('filter=')
+      );
+      expect(filterCall).toBeTruthy();
+      expect(filterCall![0]).toContain('filter=Alice');
+      expect(filterCall![0]).toContain('filter_column=name');
+    });
+
+    // The badge shows the server-provided filtered total_count.
+    await waitFor(() => {
+      expect(screen.getByText('(1 matches)')).toBeInTheDocument();
     });
   });
 

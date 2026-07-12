@@ -173,6 +173,41 @@ yarn install && yarn dev
 
 The app starts at <http://localhost:3000>.
 
+## 🏢 Building via an Internal Artifactory
+
+In corporate environments you can route npm / cargo dependency downloads through an internal registry (proxy) such as JFrog Artifactory. **When the variables are unset, the official registries are used and behavior is completely unchanged.**
+
+### With Docker Compose
+
+Set the following in `.env` (see `.env.example`) before building:
+
+```bash
+# Frontend (Yarn Berry)
+NPM_REGISTRY=https://mycompany.jfrog.io/artifactory/api/npm/npm-remote/
+NPM_AUTH_TOKEN=            # only if authentication is required
+
+# Backend (cargo sparse index)
+CARGO_REGISTRY=sparse+https://mycompany.jfrog.io/artifactory/api/cargo/crates-remote/index/
+```
+
+```bash
+docker compose build
+# or dev: docker compose -f docker-compose.dev.yml build
+```
+
+These values are wired into each service's `build.args` and used inside the `Dockerfile` for `yarn config set npmRegistryServer` / cargo source replacement.
+
+If base images must also come from an internal Docker proxy, override the build args `BASE_IMAGE` (and `RUNTIME_IMAGE` for the backend).
+
+### Local Development (outside Docker)
+
+- **npm (Yarn):** set the `YARN_NPM_REGISTRY_SERVER` environment variable, or run `yarn config set npmRegistryServer <URL>`, then `yarn install`.
+- **cargo:** copy `backend/.cargo/config.toml.example` to `backend/.cargo/config.toml` and edit the registry URL (the real file is gitignored), then `cargo build` / `cargo check`.
+
+### Handling Checksum Mismatches
+
+If Artifactory rewrites tarballs, `yarn install --immutable` may fail with a checksum mismatch. Temporarily set `YARN_CHECKSUM_BEHAVIOR=update` for the build. For cargo token authentication, use the `CARGO_REGISTRIES_*` environment variables (an anonymous-read configuration is recommended).
+
 ## 📁 Project Structure
 
 ```bash

@@ -1,0 +1,18 @@
+# Cargo source replacement for building through an internal package registry
+# (e.g. JFrog Artifactory) instead of crates.io.
+#
+# Usage (local development, outside Docker):
+#   cp backend/.cargo/config.toml.example backend/.cargo/config.toml
+#   # then edit the registry URL below to match your Artifactory instance
+#
+# The real backend/.cargo/config.toml is gitignored so your internal URL is
+# never committed. When this file is absent, cargo uses crates.io unchanged.
+#
+# The registry must be a Cargo sparse index, e.g.:
+#   sparse+https://mycompany.jfrog.io/artifactory/api/cargo/crates-remote/index/
+
+[source.crates-io]
+replace-with = "internal"
+
+[source.internal]
+registry = "sparse+https://mycompany.jfrog.io/artifactory/api/cargo/crates-remote/index/"

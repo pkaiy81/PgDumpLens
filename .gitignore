@@ -4,6 +4,10 @@
 /backend/target/
 **/*.rs.bk
 
+# Local cargo source-replacement config (internal registry). Keep the
+# committed .example template; never commit the real config.
+/backend/.cargo/config.toml
+
 # ====================
 # Node.js / Next.js
 # ====================

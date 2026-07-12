@@ -5,6 +5,7 @@ import { useParams, useRouter, useSearchParams } from 'next/navigation';
 import Link from 'next/link';
 import { SchemaExplorer } from '@/components/SchemaExplorer';
 import SearchResults from '@/components/SearchResults';
+import { SqlConsole } from '@/components/SqlConsole';
 import DiffViewer from '@/components/DiffViewer';
 import { SchemaDiffResponse, TableDataDiffResponse } from '@/types';
 import { Table2, X, Check, ArrowRight, ArrowLeft, AlertTriangle } from 'lucide-react';
@@ -112,8 +113,8 @@ export default function DumpDetailPage() {
   const [deleting, setDeleting] = useState(false);
   
   // Initialize activeTab from URL params
-  const tabFromUrl = searchParams.get('tab') as 'schema' | 'search' | 'compare' | null;
-  const [activeTab, setActiveTab] = useState<'schema' | 'search' | 'compare'>(tabFromUrl || 'schema');
+  const tabFromUrl = searchParams.get('tab') as 'schema' | 'search' | 'sql' | 'compare' | null;
+  const [activeTab, setActiveTab] = useState<'schema' | 'search' | 'sql' | 'compare'>(tabFromUrl || 'schema');
   
   // SchemaExplorer state from URL - use state so it updates on popstate
   const [currentViewMode, setCurrentViewMode] = useState<'tables' | 'relationships' | 'columns' | 'table-detail' | 'data' | null>(
@@ -150,7 +151,7 @@ export default function DumpDetailPage() {
   }, [searchParams, isPopstate]);
   
   // Handle tab change with URL update
-  const handleTabChange = useCallback((tab: 'schema' | 'search' | 'compare') => {
+  const handleTabChange = useCallback((tab: 'schema' | 'search' | 'sql' | 'compare') => {
     setActiveTab(tab);
     updateUrl({ tab: tab === 'schema' ? null : tab });
   }, [updateUrl]);
@@ -188,7 +189,7 @@ export default function DumpDetailPage() {
     const handlePopState = () => {
       setIsPopstate(true);
       const params = new URLSearchParams(window.location.search);
-      const tab = params.get('tab') as 'schema' | 'search' | 'compare' | null;
+      const tab = params.get('tab') as 'schema' | 'search' | 'sql' | 'compare' | null;
       setActiveTab(tab || 'schema');
       
       // Update SchemaExplorer state from URL
@@ -791,6 +792,16 @@ export default function DumpDetailPage() {
                   🔍 Full-Text Search
                 </button>
                 <button
+                  onClick={() => handleTabChange('sql')}
+                  className={`py-4 px-2 font-medium text-sm border-b-2 transition-colors ${
+                    activeTab === 'sql'
+                      ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                      : 'border-transparent text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-300'
+                  }`}
+                >
+                  🖥️ SQL Console
+                </button>
+                <button
                   onClick={() => handleTabChange('compare')}
                   className={`py-4 px-2 font-medium text-sm border-b-2 transition-colors ${
                     activeTab === 'compare'
@@ -817,10 +828,12 @@ export default function DumpDetailPage() {
                   onStateChange={handleSchemaExplorerStateChange}
                 />
               ) : activeTab === 'search' ? (
-                <SearchResults 
+                <SearchResults
                   dumpId={dump.id}
                   databases={databases?.databases}
                 />
+              ) : activeTab === 'sql' ? (
+                <SqlConsole dumpId={dump.id} database={selectedDb || undefined} />
               ) : (
                 <div className="space-y-6">
                   {/* Database selector for comparison (only show if multiple databases) */}
