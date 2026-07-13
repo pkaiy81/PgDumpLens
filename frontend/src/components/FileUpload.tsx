@@ -23,7 +23,7 @@ export function FileUpload({ onUploadComplete }: FileUploadProps) {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [name, setName] = useState('');
-  const [isPrivate, setIsPrivate] = useState(false);
+  const [isPrivate, setIsPrivate] = useState(true);
   
   // New state for table selection
   const [step, setStep] = useState<UploadStep>('upload');

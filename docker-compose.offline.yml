@@ -25,7 +25,7 @@ services:
       - SANDBOX_PORT=5432
       - SANDBOX_USER=sandbox
       - SANDBOX_PASSWORD=${SANDBOX_PASSWORD:-secret}
-      - DUMP_STORAGE_PATH=/dumps
+      - UPLOAD_DIR=/dumps
       - RUST_LOG=info
     volumes:
       - dump-files:/dumps

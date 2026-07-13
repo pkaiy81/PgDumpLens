@@ -249,6 +249,22 @@ describe('SqlConsole', () => {
     expect(mockFetch).toHaveBeenCalledTimes(4);
   });
 
+  it('refocuses the terminal input after a command completes', async () => {
+    mockFetch
+      .mockResolvedValueOnce(sessionResponse())
+      .mockResolvedValueOnce(executeResponse([tableBlock()]));
+
+    render(<SqlConsole dumpId="123" />);
+    await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
+
+    enter('SELECT 1;');
+    await waitFor(() => expect(screen.getByText('Alice')).toBeInTheDocument());
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(terminalInput());
+    });
+  });
+
   it('copies a result table as CSV and JSON', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.assign(navigator, { clipboard: { writeText } });
