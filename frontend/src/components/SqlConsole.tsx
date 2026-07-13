@@ -350,6 +350,12 @@ export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
     }
   }, [entries]);
 
+  // Refocus the input once a command finishes running (disabling the input
+  // during execution causes the browser to drop focus from it).
+  useEffect(() => {
+    if (!running) inputRef.current?.focus();
+  }, [running]);
+
   const postInput = async (
     sid: string,
     text: string
@@ -531,7 +537,7 @@ export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
       <div
         ref={scrollRef}
         onClick={() => inputRef.current?.focus()}
-        className="h-[32rem] overflow-y-auto rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100"
+        className="h-[calc(100vh-26rem)] min-h-[26rem] overflow-y-auto rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100"
       >
         {entries.map((entry, i) => {
           if (entry.kind === 'input') {
