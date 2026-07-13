@@ -20,7 +20,8 @@ use db_viewer_core::domain::{Dump, DumpStatus};
 pub struct CreateDumpRequest {
     pub name: Option<String>,
     pub slug: Option<String>,
-    /// If true, the dump will not appear in the "Recent Dumps" list
+    /// If false, the dump will appear in the "Recent Dumps" list.
+    /// Defaults to `true` (private) when omitted.
     pub is_private: Option<bool>,
 }
 
@@ -62,7 +63,7 @@ pub async fn create_dump(
     }
 
     // Insert dump record
-    let is_private = req.is_private.unwrap_or(false);
+    let is_private = req.is_private.unwrap_or(true);
     sqlx::query(
         r#"
         INSERT INTO dumps (id, slug, name, status, created_at, updated_at, expires_at, is_private)
