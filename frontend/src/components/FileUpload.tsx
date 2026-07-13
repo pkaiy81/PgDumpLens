@@ -33,6 +33,37 @@ export function FileUpload({ onUploadComplete }: FileUploadProps) {
   const [excludedTables, setExcludedTables] = useState<Set<string>>(new Set());
   const [isLoadingTables, setIsLoadingTables] = useState(false);
 
+  const proceedWithRestore = useCallback(async (id: string, dumpSlug: string, excluded: string[]) => {
+    setStep('restoring');
+    setProgress(80);
+    setError(null);
+
+    try {
+      // Use restore with exclusions if there are any
+      const restoreUrl = excluded.length > 0
+        ? `/api/dumps/${id}/restore-with-exclusions`
+        : `/api/dumps/${id}/restore`;
+
+      const restoreRes = await fetch(restoreUrl, {
+        method: 'POST',
+        headers: excluded.length > 0 ? { 'Content-Type': 'application/json' } : undefined,
+        body: excluded.length > 0 ? JSON.stringify({ excluded_tables: excluded }) : undefined,
+      });
+
+      if (!restoreRes.ok) {
+        throw new Error('Failed to start restore');
+      }
+
+      setProgress(100);
+      onUploadComplete(id, dumpSlug);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Restore failed');
+      setStep('select-tables');
+    } finally {
+      setIsUploading(false);
+    }
+  }, [onUploadComplete]);
+
   const handleUpload = useCallback(async (file: File) => {
     setIsUploading(true);
     setProgress(0);
@@ -43,7 +74,7 @@ export function FileUpload({ onUploadComplete }: FileUploadProps) {
       const createRes = await fetch('/api/dumps', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           name: name || file.name,
           is_private: isPrivate,
         }),
@@ -100,49 +131,13 @@ export function FileUpload({ onUploadComplete }: FileUploadProps) {
       setError(err instanceof Error ? err.message : 'Upload failed');
       setIsUploading(false);
     }
-  }, [name, isPrivate]);
-
-  const proceedWithRestore = async (id: string, dumpSlug: string, excluded: string[]) => {
-    setStep('restoring');
-    setProgress(80);
-    setError(null);
-
-    try {
-      // Use restore with exclusions if there are any
-      const restoreUrl = excluded.length > 0
-        ? `/api/dumps/${id}/restore-with-exclusions`
-        : `/api/dumps/${id}/restore`;
-      
-      const restoreRes = await fetch(restoreUrl, {
-        method: 'POST',
-        headers: excluded.length > 0 ? { 'Content-Type': 'application/json' } : undefined,
-        body: excluded.length > 0 ? JSON.stringify({ excluded_tables: excluded }) : undefined,
-      });
-
-      if (!restoreRes.ok) {
-        throw new Error('Failed to start restore');
-      }
-
-      setProgress(100);
-      onUploadComplete(id, dumpSlug);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Restore failed');
-      setStep('select-tables');
-    } finally {
-      setIsUploading(false);
-    }
-  };
+  }, [name, isPrivate, proceedWithRestore]);
 
   const handleConfirmSelection = async () => {
     if (!dumpId || !slug) return;
-    
+
     const excluded = Array.from(excludedTables);
     await proceedWithRestore(dumpId, slug, excluded);
-  };
-
-  const handleSkipSelection = async () => {
-    if (!dumpId || !slug) return;
-    await proceedWithRestore(dumpId, slug, []);
   };
 
   const toggleTableExclusion = (schema: string, table: string) => {
@@ -203,6 +198,13 @@ export function FileUpload({ onUploadComplete }: FileUploadProps) {
     setError(null);
     setName('');
     setIsPrivate(false);
+  };
+
+  const handleBack = async () => {
+    if (dumpId) {
+      fetch(`/api/dumps/${dumpId}`, { method: 'DELETE' }).catch(() => {});
+    }
+    handleReset();
   };
 
   const formatRowCount = (count: number | null) => {
@@ -353,11 +355,11 @@ export function FileUpload({ onUploadComplete }: FileUploadProps) {
 
         <div className="flex items-center justify-between pt-4">
           <button
-            onClick={handleSkipSelection}
+            onClick={handleBack}
             className="px-4 py-2 text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white transition-colors flex items-center gap-2"
           >
             <ArrowLeft className="w-4 h-4" />
-            Include All Data
+            Back
           </button>
           <button
             onClick={handleConfirmSelection}
