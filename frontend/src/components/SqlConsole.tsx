@@ -139,29 +139,29 @@ function TableBlock({
   };
 
   return (
-    <div className="group relative my-1">
-      <div className="absolute right-0 top-0 z-10 hidden items-center gap-2 group-hover:flex">
+    <div className="my-1">
+      <div className="flex items-center justify-end gap-2 pb-0.5">
         {copied && (
           <span className="text-xs text-emerald-400">Copied!</span>
         )}
         <button
           type="button"
           onClick={() => doCopy('CSV')}
-          className="text-xs text-slate-500 hover:text-slate-200"
+          className="text-xs text-slate-600 hover:text-slate-200"
         >
           Copy CSV
         </button>
         <button
           type="button"
           onClick={() => doCopy('TSV')}
-          className="text-xs text-slate-500 hover:text-slate-200"
+          className="text-xs text-slate-600 hover:text-slate-200"
         >
           Copy TSV
         </button>
         <button
           type="button"
           onClick={() => doCopy('JSON')}
-          className="text-xs text-slate-500 hover:text-slate-200"
+          className="text-xs text-slate-600 hover:text-slate-200"
         >
           Copy JSON
         </button>
