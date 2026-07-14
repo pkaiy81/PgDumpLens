@@ -10,6 +10,16 @@ import {
 const mockFetch = vi.fn();
 global.fetch = mockFetch;
 
+// Console (session-create / execute / DELETE) responses are dispensed in FIFO
+// order from this queue; schema requests are answered out-of-band from
+// `schemaBody` so tab-completion fetches never disturb the ordered mocks.
+const consoleQueue: unknown[] = [];
+let schemaBody: unknown = {};
+
+function enqueue(...responses: unknown[]) {
+  consoleQueue.push(...responses);
+}
+
 // A successful session-creation response.
 function sessionResponse(database = 'mydb') {
   return {
@@ -64,38 +74,68 @@ function enter(value: string) {
   fireEvent.keyDown(el, { key: 'Enter' });
 }
 
+// Console POSTs to /api/console/:id (execute), excluding the DELETE teardown.
+function executePosts() {
+  return mockFetch.mock.calls.filter(
+    (c) =>
+      typeof c[0] === 'string' &&
+      c[0].startsWith('/api/console/') &&
+      c[1]?.method === 'POST'
+  );
+}
+
+// Session-creation POSTs to /api/dumps/:id/console.
+function createPosts() {
+  return mockFetch.mock.calls.filter((c) => c[0] === '/api/dumps/123/console');
+}
+
 describe('SqlConsole', () => {
   beforeEach(() => {
     mockFetch.mockReset();
-    // Default response so unmount DELETE / unexpected calls resolve cleanly.
-    mockFetch.mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({}),
+    consoleQueue.length = 0;
+    schemaBody = {};
+    // Reset clipboard between tests; individual tests opt into a mock.
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
+    mockFetch.mockImplementation((url: unknown, opts?: { method?: string }) => {
+      const u = String(url);
+      if (u.includes('/schema')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => schemaBody,
+        });
+      }
+      if (opts?.method === 'DELETE') {
+        return Promise.resolve({ ok: true, status: 204, json: async () => ({}) });
+      }
+      if (consoleQueue.length) return Promise.resolve(consoleQueue.shift());
+      return Promise.resolve({ ok: true, status: 200, json: async () => ({}) });
     });
     localStorage.clear();
   });
 
   it('creates a session on mount and shows the prompt', async () => {
-    mockFetch.mockResolvedValueOnce(sessionResponse());
+    enqueue(sessionResponse());
 
     render(<SqlConsole dumpId="123" />);
 
     await waitFor(() => {
       expect(screen.getByText('mydb=#')).toBeInTheDocument();
     });
-    // The first call is the session-creation POST.
-    expect(mockFetch.mock.calls[0][0]).toBe('/api/dumps/123/console');
-    expect(mockFetch.mock.calls[0][1].method).toBe('POST');
+    const create = createPosts()[0];
+    expect(create[0]).toBe('/api/dumps/123/console');
+    expect(create[1].method).toBe('POST');
     expect(
       screen.getByText(/You are connected to database "mydb"\./)
     ).toBeInTheDocument();
   });
 
   it('runs a semicolon-terminated statement and renders a table', async () => {
-    mockFetch
-      .mockResolvedValueOnce(sessionResponse())
-      .mockResolvedValueOnce(executeResponse([tableBlock()]));
+    enqueue(sessionResponse(), executeResponse([tableBlock()]));
 
     render(<SqlConsole dumpId="123" />);
     await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
@@ -107,16 +147,13 @@ describe('SqlConsole', () => {
     });
     expect(screen.getByText('(1 row)')).toBeInTheDocument();
 
-    // The execute call carries the raw input.
-    const execCall = mockFetch.mock.calls[1];
+    const execCall = executePosts()[0];
     expect(execCall[0]).toBe('/api/console/s-1');
     expect(JSON.parse(execCall[1].body).input).toBe('SELECT 1;');
   });
 
   it('buffers a multi-line statement until the terminating semicolon', async () => {
-    mockFetch
-      .mockResolvedValueOnce(sessionResponse())
-      .mockResolvedValueOnce(executeResponse([{ type: 'text', text: 'SELECT 1' }]));
+    enqueue(sessionResponse(), executeResponse([{ type: 'text', text: 'SELECT 1' }]));
 
     render(<SqlConsole dumpId="123" />);
     await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
@@ -124,55 +161,101 @@ describe('SqlConsole', () => {
     enter('SELECT *');
     // Continuation prompt appears; no execute call yet.
     await waitFor(() => expect(screen.getByText('mydb-#')).toBeInTheDocument());
-    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(executePosts()).toHaveLength(0);
 
     enter('FROM t;');
 
-    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
-    const body = JSON.parse(mockFetch.mock.calls[1][1].body);
+    await waitFor(() => expect(executePosts()).toHaveLength(1));
+    const body = JSON.parse(executePosts()[0][1].body);
     expect(body.input).toBe('SELECT *\nFROM t;');
   });
 
+  it('does nothing on an empty line with an empty buffer', async () => {
+    enqueue(sessionResponse());
+
+    render(<SqlConsole dumpId="123" />);
+    await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
+
+    enter('');
+
+    // Prompt is echoed but we stay at the primary prompt (no continuation) and
+    // nothing is sent to the backend.
+    expect(screen.queryByText('mydb-#')).not.toBeInTheDocument();
+    expect(executePosts()).toHaveLength(0);
+  });
+
+  it('runs a meta-command immediately even mid-continuation, keeping the buffer', async () => {
+    enqueue(
+      sessionResponse(),
+      executeResponse([
+        {
+          type: 'table',
+          columns: ['Schema', 'Name', 'Type', 'Owner'],
+          rows: [['public', 'products', 'table', 'app']],
+          footer: '(1 row)',
+          expanded: false,
+        },
+      ]),
+      executeResponse([{ type: 'text', text: 'done' }])
+    );
+
+    render(<SqlConsole dumpId="123" />);
+    await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
+
+    // Enter a continuation (no semicolon).
+    enter('SELECT 1');
+    await waitFor(() => expect(screen.getByText('mydb-#')).toBeInTheDocument());
+
+    // A meta-command executes at once and leaves us in continuation.
+    enter('\\dt');
+    await waitFor(() => expect(executePosts()).toHaveLength(1));
+    expect(JSON.parse(executePosts()[0][1].body).input).toBe('\\dt');
+    // Still in continuation (the buffer was preserved).
+    expect(screen.getAllByText('mydb-#').length).toBeGreaterThan(0);
+
+    // The buffered statement is still there and completes on the semicolon.
+    enter('+ 1;');
+    await waitFor(() => expect(executePosts()).toHaveLength(2));
+    expect(JSON.parse(executePosts()[1][1].body).input).toBe('SELECT 1\n+ 1;');
+  });
+
   it('sends a meta-command immediately without a semicolon', async () => {
-    mockFetch
-      .mockResolvedValueOnce(sessionResponse())
-      .mockResolvedValueOnce(
-        executeResponse([
-          {
-            type: 'table',
-            columns: ['Schema', 'Name', 'Type', 'Owner'],
-            rows: [['public', 'products', 'table', 'app']],
-            footer: '(1 row)',
-            expanded: false,
-          },
-        ])
-      );
+    enqueue(
+      sessionResponse(),
+      executeResponse([
+        {
+          type: 'table',
+          columns: ['Schema', 'Name', 'Type', 'Owner'],
+          rows: [['public', 'products', 'table', 'app']],
+          footer: '(1 row)',
+          expanded: false,
+        },
+      ])
+    );
 
     render(<SqlConsole dumpId="123" />);
     await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
 
     enter('\\dt');
 
-    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
-    const body = JSON.parse(mockFetch.mock.calls[1][1].body);
-    expect(body.input).toBe('\\dt');
+    await waitFor(() => expect(executePosts()).toHaveLength(1));
+    expect(JSON.parse(executePosts()[0][1].body).input).toBe('\\dt');
     expect(screen.getByText('products')).toBeInTheDocument();
   });
 
   it('updates the prompt and shows a notice after \\c', async () => {
-    mockFetch
-      .mockResolvedValueOnce(sessionResponse())
-      .mockResolvedValueOnce(
-        executeResponse(
-          [
-            {
-              type: 'notice',
-              text: 'You are now connected to database "hrdb".',
-            },
-          ],
-          { database: 'hrdb', prompt: 'hrdb=#' }
-        )
-      );
+    enqueue(
+      sessionResponse(),
+      executeResponse(
+        [
+          {
+            type: 'notice',
+            text: 'You are now connected to database "hrdb".',
+          },
+        ],
+        { database: 'hrdb', prompt: 'hrdb=#' }
+      )
+    );
 
     render(<SqlConsole dumpId="123" />);
     await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
@@ -186,13 +269,10 @@ describe('SqlConsole', () => {
   });
 
   it('renders an error block in red', async () => {
-    mockFetch
-      .mockResolvedValueOnce(sessionResponse())
-      .mockResolvedValueOnce(
-        executeResponse([
-          { type: 'error', text: 'ERROR:  division by zero' },
-        ])
-      );
+    enqueue(
+      sessionResponse(),
+      executeResponse([{ type: 'error', text: 'ERROR:  division by zero' }])
+    );
 
     render(<SqlConsole dumpId="123" />);
     await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
@@ -207,15 +287,13 @@ describe('SqlConsole', () => {
   });
 
   it('restores the previous command with ArrowUp and persists history', async () => {
-    mockFetch
-      .mockResolvedValueOnce(sessionResponse())
-      .mockResolvedValueOnce(executeResponse([tableBlock()]));
+    enqueue(sessionResponse(), executeResponse([tableBlock()]));
 
     render(<SqlConsole dumpId="123" />);
     await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
 
     enter('SELECT 1;');
-    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(executePosts()).toHaveLength(1));
 
     const el = terminalInput();
     fireEvent.keyDown(el, { key: 'ArrowUp' });
@@ -228,11 +306,12 @@ describe('SqlConsole', () => {
   });
 
   it('recreates the session and retries on a 404', async () => {
-    mockFetch
-      .mockResolvedValueOnce(sessionResponse()) // initial session
-      .mockResolvedValueOnce({ ok: false, status: 404, json: async () => ({}) }) // execute -> expired
-      .mockResolvedValueOnce(sessionResponse()) // recreate
-      .mockResolvedValueOnce(executeResponse([tableBlock()])); // retry succeeds
+    enqueue(
+      sessionResponse(), // initial session
+      { ok: false, status: 404, json: async () => ({}) }, // execute -> expired
+      sessionResponse(), // recreate
+      executeResponse([tableBlock()]) // retry succeeds
+    );
 
     render(<SqlConsole dumpId="123" />);
     await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
@@ -245,14 +324,13 @@ describe('SqlConsole', () => {
       ).toBeInTheDocument();
     });
     expect(screen.getByText('Alice')).toBeInTheDocument();
-    // create + execute(404) + recreate + retry = 4 calls.
-    expect(mockFetch).toHaveBeenCalledTimes(4);
+    // Session created twice (initial + recreate) and executed twice.
+    expect(createPosts()).toHaveLength(2);
+    expect(executePosts()).toHaveLength(2);
   });
 
   it('refocuses the terminal input after a command completes', async () => {
-    mockFetch
-      .mockResolvedValueOnce(sessionResponse())
-      .mockResolvedValueOnce(executeResponse([tableBlock()]));
+    enqueue(sessionResponse(), executeResponse([tableBlock()]));
 
     render(<SqlConsole dumpId="123" />);
     await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
@@ -267,24 +345,27 @@ describe('SqlConsole', () => {
 
   it('copies a result table as CSV and JSON', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText } });
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      writable: true,
+      value: { writeText },
+    });
 
-    mockFetch
-      .mockResolvedValueOnce(sessionResponse())
-      .mockResolvedValueOnce(
-        executeResponse([
-          {
-            type: 'table',
-            columns: ['id', 'name'],
-            rows: [
-              ['1', 'Alice'],
-              ['2', null],
-            ],
-            footer: '(2 rows)',
-            expanded: false,
-          },
-        ])
-      );
+    enqueue(
+      sessionResponse(),
+      executeResponse([
+        {
+          type: 'table',
+          columns: ['id', 'name'],
+          rows: [
+            ['1', 'Alice'],
+            ['2', null],
+          ],
+          footer: '(2 rows)',
+          expanded: false,
+        },
+      ])
+    );
 
     render(<SqlConsole dumpId="123" />);
     await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());

@@ -153,7 +153,19 @@ pub async fn execute(
 
     let start = Instant::now();
     let (mut blocks, ended) = if input.starts_with('\\') {
-        meta::run_meta(meta::parse_meta(input), &mut guard, &state).await
+        // A meta-command must be a single line. A multi-line input starting with
+        // `\` is a malformed mix (e.g. a stray `\dt` buffered ahead of SQL); flag
+        // it instead of misparsing the whole thing as one meta-command.
+        if input.contains('\n') {
+            (
+                vec![Block::Error {
+                    text: "\\-commands must be a single line.".to_string(),
+                }],
+                false,
+            )
+        } else {
+            meta::run_meta(meta::parse_meta(input), &mut guard, &state).await
+        }
     } else {
         let mut b = sql::run_sql(&mut guard.conn, input).await;
         for blk in &mut b {

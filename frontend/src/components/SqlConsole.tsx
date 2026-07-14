@@ -459,8 +459,14 @@ export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
     setInput('');
     setHistoryIndex(-1);
 
-    // Meta-command: only when the buffer is empty and the line starts with `\`.
-    if (buffer.length === 0 && line.trimStart().startsWith('\\')) {
+    // Empty line with an empty buffer is a no-op (psql): echo the prompt only.
+    if (buffer.length === 0 && line.trim() === '') {
+      return;
+    }
+
+    // Meta-commands (`\`-prefixed) run immediately, even mid-continuation, and
+    // leave the continuation buffer untouched (psql behavior).
+    if (line.trimStart().startsWith('\\')) {
       submit(line.trim());
       return;
     }
