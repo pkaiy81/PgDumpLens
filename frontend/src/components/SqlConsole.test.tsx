@@ -5,6 +5,8 @@ import {
   tableToCsv,
   tableToTsv,
   tableToJson,
+  completeWord,
+  SQL_KEYWORDS,
 } from './SqlConsole';
 
 const mockFetch = vi.fn();
@@ -372,6 +374,20 @@ describe('SqlConsole', () => {
     sel.mockRestore();
   });
 
+  it('completes a keyword with Tab', async () => {
+    enqueue(sessionResponse());
+
+    render(<SqlConsole dumpId="123" />);
+    await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
+
+    const el = terminalInput();
+    fireEvent.change(el, { target: { value: 'SEL' } });
+    const evt = fireEvent.keyDown(el, { key: 'Tab' });
+    // preventDefault ran (dispatchEvent returns false when canceled).
+    expect(evt).toBe(false);
+    expect(el.value).toBe('SELECT ');
+  });
+
   it('copies a result table as CSV and JSON', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', {
@@ -412,6 +428,61 @@ describe('SqlConsole', () => {
       { id: '1', name: 'Alice' },
       { id: '2', name: null },
     ]);
+  });
+});
+
+describe('completeWord', () => {
+  it('replaces a single keyword match and appends a space', () => {
+    expect(completeWord('SEL', SQL_KEYWORDS)).toEqual({
+      kind: 'replace',
+      newInput: 'SELECT ',
+    });
+  });
+
+  it('lowercases the keyword when the typed token is lowercase', () => {
+    expect(completeWord('sel', SQL_KEYWORDS)).toEqual({
+      kind: 'replace',
+      newInput: 'select ',
+    });
+  });
+
+  it('completes a table name preserving its casing', () => {
+    const words = [...SQL_KEYWORDS, 'products'];
+    expect(completeWord('SELECT * FROM pro', words)).toEqual({
+      kind: 'replace',
+      newInput: 'SELECT * FROM products ',
+    });
+  });
+
+  it('extends to the longest common prefix on multiple matches', () => {
+    const words = ['order_items', 'order_coupons'];
+    expect(completeWord('ord', words)).toEqual({
+      kind: 'replace',
+      newInput: 'order_',
+    });
+  });
+
+  it('returns a sorted candidate list when it cannot extend', () => {
+    const words = ['orders', 'order_items', 'order_coupons'];
+    expect(completeWord('order', words)).toEqual({
+      kind: 'candidates',
+      list: ['order_coupons', 'order_items', 'orders'],
+    });
+  });
+
+  it('returns none when nothing matches', () => {
+    expect(completeWord('SELECT zzz', SQL_KEYWORDS)).toEqual({ kind: 'none' });
+  });
+
+  it('returns none when there is no word at the end', () => {
+    expect(completeWord('SELECT 1 ', SQL_KEYWORDS)).toEqual({ kind: 'none' });
+  });
+
+  it('retries after the dot for a dotted token', () => {
+    expect(completeWord('public.pro', ['products'])).toEqual({
+      kind: 'replace',
+      newInput: 'public.products ',
+    });
   });
 });
 
