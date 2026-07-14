@@ -6,6 +6,7 @@ import {
   tableToTsv,
   tableToJson,
   completeWord,
+  copyTextToClipboard,
   SQL_KEYWORDS,
 } from './SqlConsole';
 
@@ -429,6 +430,42 @@ describe('SqlConsole', () => {
       { id: '2', name: null },
     ]);
   });
+
+  it('falls back to execCommand when the clipboard API is unavailable', async () => {
+    // navigator.clipboard is undefined (reset in beforeEach) — plain-HTTP page.
+    const exec = vi.fn().mockReturnValue(true);
+    document.execCommand = exec;
+
+    enqueue(sessionResponse(), executeResponse([tableBlock()]));
+
+    render(<SqlConsole dumpId="123" />);
+    await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
+
+    enter('SELECT 1;');
+    await waitFor(() => expect(screen.getByText('Alice')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Copy CSV'));
+
+    await waitFor(() => expect(exec).toHaveBeenCalledWith('copy'));
+    expect(await screen.findByText('Copied!')).toBeInTheDocument();
+  });
+
+  it('shows "Copy failed" when copying fails entirely', async () => {
+    const exec = vi.fn().mockReturnValue(false);
+    document.execCommand = exec;
+
+    enqueue(sessionResponse(), executeResponse([tableBlock()]));
+
+    render(<SqlConsole dumpId="123" />);
+    await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
+
+    enter('SELECT 1;');
+    await waitFor(() => expect(screen.getByText('Alice')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Copy CSV'));
+
+    expect(await screen.findByText('Copy failed')).toBeInTheDocument();
+  });
 });
 
 describe('completeWord', () => {
@@ -483,6 +520,41 @@ describe('completeWord', () => {
       kind: 'replace',
       newInput: 'public.products ',
     });
+  });
+});
+
+describe('copyTextToClipboard', () => {
+  beforeEach(() => {
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      writable: true,
+      value: undefined,
+    });
+  });
+
+  it('uses the async clipboard API when available', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      writable: true,
+      value: { writeText },
+    });
+    const ok = await copyTextToClipboard('hello');
+    expect(ok).toBe(true);
+    expect(writeText).toHaveBeenCalledWith('hello');
+  });
+
+  it('falls back to execCommand in non-secure contexts', async () => {
+    const exec = vi.fn().mockReturnValue(true);
+    document.execCommand = exec;
+    const ok = await copyTextToClipboard('hello');
+    expect(ok).toBe(true);
+    expect(exec).toHaveBeenCalledWith('copy');
+  });
+
+  it('returns false when execCommand reports failure', async () => {
+    document.execCommand = vi.fn().mockReturnValue(false);
+    expect(await copyTextToClipboard('hello')).toBe(false);
   });
 });
 

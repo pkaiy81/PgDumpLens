@@ -205,6 +205,36 @@ export function completeWord(input: string, words: string[]): CompleteResult {
   return { kind: 'candidates', list };
 }
 
+/**
+ * Copy `text` to the clipboard, returning whether it succeeded. Uses the async
+ * Clipboard API when available (secure contexts) and falls back to a hidden
+ * textarea + `execCommand('copy')` for plain-HTTP pages where `navigator.
+ * clipboard` is undefined.
+ */
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to the execCommand fallback.
+    }
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 /** A rendered result table with hover copy buttons (CSV / TSV / JSON). */
 function TableBlock({
   block,
@@ -212,6 +242,7 @@ function TableBlock({
   block: Extract<Block, { type: 'table' }>;
 }) {
   const [copied, setCopied] = useState<string | null>(null);
+  const [copyFailed, setCopyFailed] = useState(false);
 
   const doCopy = async (fmt: 'CSV' | 'TSV' | 'JSON') => {
     const text =
@@ -220,12 +251,15 @@ function TableBlock({
         : fmt === 'TSV'
         ? tableToTsv(block.columns, block.rows)
         : tableToJson(block.columns, block.rows);
-    try {
-      await navigator.clipboard.writeText(text);
+    const ok = await copyTextToClipboard(text);
+    if (ok) {
+      setCopyFailed(false);
       setCopied(fmt);
       setTimeout(() => setCopied(null), 1500);
-    } catch {
-      // Clipboard unavailable; silently ignore.
+    } else {
+      setCopied(null);
+      setCopyFailed(true);
+      setTimeout(() => setCopyFailed(false), 1500);
     }
   };
 
@@ -234,6 +268,9 @@ function TableBlock({
       <div className="flex items-center justify-end gap-2 pb-0.5">
         {copied && (
           <span className="text-xs text-emerald-400">Copied!</span>
+        )}
+        {copyFailed && (
+          <span className="text-xs text-red-400">Copy failed</span>
         )}
         <button
           type="button"
