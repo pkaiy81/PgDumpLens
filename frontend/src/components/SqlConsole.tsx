@@ -353,7 +353,9 @@ export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
   // Refocus the input once a command finishes running (disabling the input
   // during execution causes the browser to drop focus from it).
   useEffect(() => {
-    if (!running) inputRef.current?.focus();
+    if (!running && !window.getSelection()?.toString()) {
+      inputRef.current?.focus();
+    }
   }, [running]);
 
   const postInput = async (
@@ -542,7 +544,12 @@ export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
       {/* Dark terminal panel. */}
       <div
         ref={scrollRef}
-        onClick={() => inputRef.current?.focus()}
+        onClick={() => {
+          // Don't steal focus (which clears the selection) mid-selection so
+          // drag-select + copy works.
+          if (window.getSelection()?.toString()) return;
+          inputRef.current?.focus();
+        }}
         className="h-[calc(100vh-26rem)] min-h-[26rem] overflow-y-auto rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100"
       >
         {entries.map((entry, i) => {

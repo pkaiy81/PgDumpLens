@@ -343,6 +343,35 @@ describe('SqlConsole', () => {
     });
   });
 
+  it('does not steal focus while text is selected', async () => {
+    enqueue(sessionResponse());
+
+    const { container } = render(<SqlConsole dumpId="123" />);
+    await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
+
+    const panel = container.querySelector(
+      '[class*="overflow-y-auto"]'
+    ) as HTMLElement;
+    const input = terminalInput();
+    input.blur();
+    expect(document.activeElement).not.toBe(input);
+
+    const sel = vi
+      .spyOn(window, 'getSelection')
+      .mockReturnValue({ toString: () => 'selected text' } as unknown as Selection);
+
+    // With a live selection, clicking the panel must not refocus the input.
+    fireEvent.click(panel);
+    expect(document.activeElement).not.toBe(input);
+
+    // With no selection, clicking focuses the input as before.
+    sel.mockReturnValue({ toString: () => '' } as unknown as Selection);
+    fireEvent.click(panel);
+    expect(document.activeElement).toBe(input);
+
+    sel.mockRestore();
+  });
+
   it('copies a result table as CSV and JSON', async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', {
