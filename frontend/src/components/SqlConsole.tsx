@@ -114,6 +114,127 @@ export function tableToJson(columns: string[], rows: (string | null)[][]): strin
   return JSON.stringify(objs, null, 2);
 }
 
+/** SQL keywords offered by tab completion (in addition to schema names). */
+export const SQL_KEYWORDS: string[] = [
+  'SELECT', 'FROM', 'WHERE', 'GROUP', 'BY', 'ORDER', 'LIMIT', 'OFFSET', 'JOIN',
+  'LEFT', 'RIGHT', 'INNER', 'OUTER', 'FULL', 'CROSS', 'ON', 'AS', 'AND', 'OR',
+  'NOT', 'NULL', 'IN', 'IS', 'EXISTS', 'BETWEEN', 'LIKE', 'ILIKE', 'DISTINCT',
+  'HAVING', 'UNION', 'ALL', 'CASE', 'WHEN', 'THEN', 'ELSE', 'END', 'INSERT',
+  'INTO', 'VALUES', 'UPDATE', 'SET', 'DELETE', 'CREATE', 'TABLE', 'INDEX',
+  'VIEW', 'DROP', 'ALTER', 'WITH', 'RETURNING', 'COUNT', 'SUM', 'AVG', 'MIN',
+  'MAX',
+];
+
+const SQL_KEYWORD_SET = new Set(SQL_KEYWORDS);
+
+/** Result of attempting tab completion on the current input. */
+export type CompleteResult =
+  | { kind: 'replace'; newInput: string }
+  | { kind: 'candidates'; list: string[] }
+  | { kind: 'none' };
+
+/** Longest common prefix of a non-empty list of strings (as-is casing). */
+function longestCommonPrefix(items: string[]): string {
+  if (items.length === 0) return '';
+  let prefix = items[0];
+  for (const s of items.slice(1)) {
+    let i = 0;
+    while (i < prefix.length && i < s.length && prefix[i] === s[i]) i++;
+    prefix = prefix.slice(0, i);
+    if (prefix === '') break;
+  }
+  return prefix;
+}
+
+/**
+ * Complete the word at the end of `input` against `words` (SQL keywords plus
+ * schema/table/column names). Case-insensitive prefix match:
+ *  - one match  -> replace the token and append a trailing space (keywords are
+ *    lowercased when the typed token is all lowercase);
+ *  - many matches -> extend to the longest common prefix if that grows the
+ *    token, otherwise return the sorted candidate list (capped at 40);
+ *  - no match -> `none`. A dotted token (`schema.table`) that matches nothing
+ *    as a whole is retried against the segment after the last dot.
+ */
+export function completeWord(input: string, words: string[]): CompleteResult {
+  const m = input.match(/[A-Za-z0-9_".]+$/);
+  if (!m) return { kind: 'none' };
+  const token = m[0];
+
+  const matchAgainst = (tok: string): string[] => {
+    const lower = tok.toLowerCase();
+    return words.filter((w) => w.toLowerCase().startsWith(lower));
+  };
+
+  let matchToken = token;
+  let matches = matchAgainst(token);
+
+  // Dotted token retry: complete the part after the last dot.
+  if (matches.length === 0 && token.includes('.')) {
+    const after = token.slice(token.lastIndexOf('.') + 1);
+    if (after.length > 0) {
+      const retried = matchAgainst(after);
+      if (retried.length > 0) {
+        matchToken = after;
+        matches = retried;
+      }
+    }
+  }
+
+  if (matches.length === 0) return { kind: 'none' };
+
+  const before = input.slice(0, input.length - matchToken.length);
+  const tokenIsLower = matchToken === matchToken.toLowerCase();
+
+  if (matches.length === 1) {
+    let cand = matches[0];
+    if (tokenIsLower && SQL_KEYWORD_SET.has(cand)) cand = cand.toLowerCase();
+    return { kind: 'replace', newInput: `${before}${cand} ` };
+  }
+
+  const lcp = longestCommonPrefix(matches);
+  if (lcp.length > matchToken.length) {
+    let ext = lcp;
+    if (tokenIsLower && matches.every((w) => SQL_KEYWORD_SET.has(w))) {
+      ext = ext.toLowerCase();
+    }
+    return { kind: 'replace', newInput: `${before}${ext}` };
+  }
+
+  const list = [...matches].sort().slice(0, 40);
+  return { kind: 'candidates', list };
+}
+
+/**
+ * Copy `text` to the clipboard, returning whether it succeeded. Uses the async
+ * Clipboard API when available (secure contexts) and falls back to a hidden
+ * textarea + `execCommand('copy')` for plain-HTTP pages where `navigator.
+ * clipboard` is undefined.
+ */
+export async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // Fall through to the execCommand fallback.
+    }
+  }
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    document.body.removeChild(ta);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
 /** A rendered result table with hover copy buttons (CSV / TSV / JSON). */
 function TableBlock({
   block,
@@ -121,6 +242,7 @@ function TableBlock({
   block: Extract<Block, { type: 'table' }>;
 }) {
   const [copied, setCopied] = useState<string | null>(null);
+  const [copyFailed, setCopyFailed] = useState(false);
 
   const doCopy = async (fmt: 'CSV' | 'TSV' | 'JSON') => {
     const text =
@@ -129,12 +251,15 @@ function TableBlock({
         : fmt === 'TSV'
         ? tableToTsv(block.columns, block.rows)
         : tableToJson(block.columns, block.rows);
-    try {
-      await navigator.clipboard.writeText(text);
+    const ok = await copyTextToClipboard(text);
+    if (ok) {
+      setCopyFailed(false);
       setCopied(fmt);
       setTimeout(() => setCopied(null), 1500);
-    } catch {
-      // Clipboard unavailable; silently ignore.
+    } else {
+      setCopied(null);
+      setCopyFailed(true);
+      setTimeout(() => setCopyFailed(false), 1500);
     }
   };
 
@@ -143,6 +268,9 @@ function TableBlock({
       <div className="flex items-center justify-end gap-2 pb-0.5">
         {copied && (
           <span className="text-xs text-emerald-400">Copied!</span>
+        )}
+        {copyFailed && (
+          <span className="text-xs text-red-400">Copy failed</span>
         )}
         <button
           type="button"
@@ -242,6 +370,7 @@ export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
   const draftRef = useRef('');
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const wordsRef = useRef<string[]>(SQL_KEYWORDS);
 
   const appendEntries = useCallback((items: TermEntry[]) => {
     setEntries((prev) => {
@@ -343,6 +472,47 @@ export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [dumpId, database]);
 
+  // Load tab-completion words (schema/table/column names + keywords) once per
+  // session and whenever the connected database changes. Failure degrades to
+  // keywords only.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const url = db
+          ? `/api/dumps/${dumpId}/schema?database=${encodeURIComponent(db)}`
+          : `/api/dumps/${dumpId}/schema`;
+        const res = await fetch(url);
+        if (!res.ok) {
+          if (!cancelled) wordsRef.current = SQL_KEYWORDS;
+          return;
+        }
+        const data = (await res.json()) as {
+          schema_graph?: {
+            tables?: Array<{
+              schema_name?: string;
+              table_name?: string;
+              columns?: Array<{ name?: string }>;
+            }>;
+          };
+        } | null;
+        if (cancelled) return;
+        const set = new Set<string>(SQL_KEYWORDS);
+        for (const t of data?.schema_graph?.tables ?? []) {
+          if (t.schema_name) set.add(t.schema_name);
+          if (t.table_name) set.add(t.table_name);
+          for (const c of t.columns ?? []) if (c.name) set.add(c.name);
+        }
+        wordsRef.current = Array.from(set);
+      } catch {
+        if (!cancelled) wordsRef.current = SQL_KEYWORDS;
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [dumpId, db]);
+
   // Auto-scroll to the newest line.
   useEffect(() => {
     if (scrollRef.current) {
@@ -353,7 +523,9 @@ export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
   // Refocus the input once a command finishes running (disabling the input
   // during execution causes the browser to drop focus from it).
   useEffect(() => {
-    if (!running) inputRef.current?.focus();
+    if (!running && !window.getSelection()?.toString()) {
+      inputRef.current?.focus();
+    }
   }, [running]);
 
   const postInput = async (
@@ -459,8 +631,14 @@ export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
     setInput('');
     setHistoryIndex(-1);
 
-    // Meta-command: only when the buffer is empty and the line starts with `\`.
-    if (buffer.length === 0 && line.trimStart().startsWith('\\')) {
+    // Empty line with an empty buffer is a no-op (psql): echo the prompt only.
+    if (buffer.length === 0 && line.trim() === '') {
+      return;
+    }
+
+    // Meta-commands (`\`-prefixed) run immediately, even mid-continuation, and
+    // leave the continuation buffer untouched (psql behavior).
+    if (line.trimStart().startsWith('\\')) {
       submit(line.trim());
       return;
     }
@@ -510,10 +688,24 @@ export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
     }
   };
 
+  const applyCompletion = () => {
+    const result = completeWord(input, wordsRef.current);
+    if (result.kind === 'replace') {
+      setInput(result.newInput);
+    } else if (result.kind === 'candidates') {
+      appendBlocks([{ type: 'text', text: result.list.join('  ') }]);
+    }
+  };
+
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault();
       handleEnter();
+    } else if (e.key === 'Tab' && !e.shiftKey) {
+      // Tab: simple completion. Shift+Tab keeps the browser default (leave the
+      // terminal via keyboard).
+      e.preventDefault();
+      applyCompletion();
     } else if (e.key === 'c' && e.ctrlKey) {
       e.preventDefault();
       handleCtrlC();
@@ -536,7 +728,12 @@ export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
       {/* Dark terminal panel. */}
       <div
         ref={scrollRef}
-        onClick={() => inputRef.current?.focus()}
+        onClick={() => {
+          // Don't steal focus (which clears the selection) mid-selection so
+          // drag-select + copy works.
+          if (window.getSelection()?.toString()) return;
+          inputRef.current?.focus();
+        }}
         className="h-[calc(100vh-26rem)] min-h-[26rem] overflow-y-auto rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 font-mono text-sm text-slate-100"
       >
         {entries.map((entry, i) => {
