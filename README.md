@@ -533,6 +533,14 @@ curl http://localhost:${HTTP_PORT}/health
 | `deploy/nginx/nginx.conf`    | Nginx 設定                           | ✅          |
 | `.env`                       | 環境変数設定（ポート、パスワード等） | 環境による |
 
+> **🔧 トラブルシューティング**: 既存のデプロイでコンテナ再起動後の 502 エラー対策（nginx の DNS 再解決）を反映するには、`git pull` 後に以下を実行してください：
+>
+> ```bash
+> docker compose -f docker-compose.offline.yml up -d --force-recreate nginx
+> ```
+>
+> `nginx.conf` はバインドマウントのため、イメージの再取得は不要です。修正前のバージョンで再起動後に 502 エラーが発生した場合は、`docker restart pgdumplens-nginx` で復旧できます。
+
 ---
 
 ### Docker Compose デプロイ (ソースビルド)

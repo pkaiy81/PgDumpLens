@@ -446,6 +446,14 @@ curl http://localhost:${HTTP_PORT}/health
 | `deploy/nginx/nginx.conf`    | Nginx config          | ✅           |
 | `.env`                       | Environment variables | Situational |
 
+> **🔧 Troubleshooting**: To apply the fix for 502 errors after container restarts (nginx DNS re-resolution) to an existing deployment, run `git pull` and then:
+>
+> ```bash
+> docker compose -f docker-compose.offline.yml up -d --force-recreate nginx
+> ```
+>
+> Since `nginx.conf` is bind-mounted, no image re-pull is needed. If you're on a pre-fix version and hit a 502 after a restart, `docker restart pgdumplens-nginx` will recover it.
+
 ---
 
 ### Docker Compose Deployment (Source Build)
