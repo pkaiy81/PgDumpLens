@@ -6,6 +6,7 @@
 //! queries. See [`session`] for the session registry and locking discipline.
 
 pub mod meta;
+pub mod notice;
 pub mod session;
 pub mod sql;
 

@@ -114,6 +114,143 @@ export function tableToJson(columns: string[], rows: (string | null)[][]): strin
   return JSON.stringify(objs, null, 2);
 }
 
+/** Characters that may appear inside an unquoted identifier. */
+function isIdentChar(c: string | undefined): boolean {
+  return c !== undefined && /[A-Za-z0-9_$\u0080-\uffff]/.test(c);
+}
+
+/**
+ * Split buffered console input at its last top-level `;`, like psql decides
+ * when to send a query. Semicolons inside '...' / E'...' strings, "..."
+ * identifiers, $tag$...$tag$ dollar quotes, -- and nested block comments, and
+ * parentheses do not count.
+ *
+ * Returns `complete` = the text up to and including the last top-level `;`
+ * (null if there is none, or the input ends inside a quote/comment) and
+ * `rest` = whatever follows it, or '' if that is only whitespace/comments.
+ */
+export function splitCompleteInput(text: string): {
+  complete: string | null;
+  rest: string;
+} {
+  const n = text.length;
+  let i = 0;
+  let depth = 0;
+  let lastSemi = -1;
+  let significantAfter = false;
+  let open = false; // ended inside an unterminated quote / comment
+
+  while (i < n) {
+    const c = text[i];
+    const next = text[i + 1];
+    if (c === '-' && next === '-') {
+      const nl = text.indexOf('\n', i);
+      i = nl === -1 ? n : nl;
+      continue;
+    }
+    if (c === '/' && next === '*') {
+      let d = 0;
+      let j = i;
+      while (j < n) {
+        if (text[j] === '/' && text[j + 1] === '*') {
+          d++;
+          j += 2;
+        } else if (text[j] === '*' && text[j + 1] === '/') {
+          d--;
+          j += 2;
+          if (d === 0) break;
+        } else {
+          j++;
+        }
+      }
+      if (d > 0) open = true;
+      i = j;
+      continue;
+    }
+    if (c === "'" || c === '"') {
+      significantAfter = true;
+      const backslash =
+        c === "'" && (text[i - 1] === 'E' || text[i - 1] === 'e') && !isIdentChar(text[i - 2]);
+      let j = i + 1;
+      let closed = false;
+      while (j < n) {
+        if (backslash && text[j] === '\\') {
+          j += 2;
+        } else if (text[j] === c) {
+          if (text[j + 1] === c) {
+            j += 2;
+          } else {
+            j++;
+            closed = true;
+            break;
+          }
+        } else {
+          j++;
+        }
+      }
+      if (!closed) open = true;
+      i = Math.min(j, n);
+      continue;
+    }
+    if (c === '$' && !isIdentChar(text[i - 1])) {
+      const m = text.slice(i).match(/^\$(?:[A-Za-z_\u0080-\uffff][A-Za-z0-9_\u0080-\uffff]*)?\$/);
+      if (m) {
+        significantAfter = true;
+        const tag = m[0];
+        const end = text.indexOf(tag, i + tag.length);
+        if (end === -1) {
+          open = true;
+          i = n;
+        } else {
+          i = end + tag.length;
+        }
+        continue;
+      }
+    }
+    if (c === '(') {
+      depth++;
+    } else if (c === ')') {
+      depth = Math.max(0, depth - 1);
+    } else if (c === ';' && depth === 0) {
+      lastSemi = i;
+      significantAfter = false;
+      i++;
+      continue;
+    }
+    if (!/\s/.test(c)) significantAfter = true;
+    i++;
+  }
+
+  if (lastSemi === -1) return { complete: null, rest: text };
+  return {
+    complete: text.slice(0, lastSemi + 1),
+    rest: significantAfter || open ? text.slice(lastSemi + 1).trimStart() : '',
+  };
+}
+
+/**
+ * Feed one entered line into the continuation buffer, psql-style.
+ *  - `\`-commands are sent at once and leave the buffer untouched;
+ *  - an empty line with an empty buffer does nothing;
+ *  - otherwise the line is buffered and everything up to the last top-level
+ *    `;` is sent (see {@link splitCompleteInput}), keeping any remainder.
+ */
+export function processLine(
+  buffer: string[],
+  line: string
+): { buffer: string[]; submit: string | null } {
+  if (line.trimStart().startsWith('\\')) {
+    return { buffer, submit: line.trim() };
+  }
+  if (buffer.length === 0 && line.trim() === '') {
+    return { buffer, submit: null };
+  }
+  const next = [...buffer, line];
+  const { complete, rest } = splitCompleteInput(next.join('\n'));
+  if (complete === null) return { buffer: next, submit: null };
+  return { buffer: rest === '' ? [] : rest.split('\n'), submit: complete };
+}
+
 /** SQL keywords offered by tab completion (in addition to schema names). */
 export const SQL_KEYWORDS: string[] = [
   'SELECT', 'FROM', 'WHERE', 'GROUP', 'BY', 'ORDER', 'LIMIT', 'OFFSET', 'JOIN',
@@ -369,7 +506,10 @@ export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
   const historyRef = useRef<HistoryEntry[]>([]);
   const draftRef = useRef('');
   const scrollRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  // True while a (possibly multi-line) input is being processed, so a second
+  // Enter cannot interleave with it between statements.
+  const processingRef = useRef(false);
   const wordsRef = useRef<string[]>(SQL_KEYWORDS);
 
   const appendEntries = useCallback((items: TermEntry[]) => {
@@ -623,32 +763,27 @@ export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
   const promptFor = (continuation: boolean): string =>
     continuation ? `${db}-#` : `${db}=#`;
 
-  const handleEnter = () => {
-    if (running) return;
-    const line = input;
-    const echoPrompt = promptFor(buffer.length > 0);
-    appendEntries([{ kind: 'input', prompt: echoPrompt, text: line }]);
+  // Run the input editor's contents. Multi-line text (pasted, typed with
+  // Shift+Enter, or recalled from history) is processed line by line exactly
+  // as if each line had been typed and entered in psql; statements completed
+  // along the way are executed in order.
+  const handleEnter = async () => {
+    if (running || processingRef.current) return;
+    processingRef.current = true;
+    const lines = input.replace(/\r\n?/g, '\n').split('\n');
     setInput('');
     setHistoryIndex(-1);
-
-    // Empty line with an empty buffer is a no-op (psql): echo the prompt only.
-    if (buffer.length === 0 && line.trim() === '') {
-      return;
-    }
-
-    // Meta-commands (`\`-prefixed) run immediately, even mid-continuation, and
-    // leave the continuation buffer untouched (psql behavior).
-    if (line.trimStart().startsWith('\\')) {
-      submit(line.trim());
-      return;
-    }
-
-    const nextBuffer = [...buffer, line];
-    if (line.trimEnd().endsWith(';')) {
-      setBuffer([]);
-      submit(nextBuffer.join('\n'));
-    } else {
-      setBuffer(nextBuffer);
+    try {
+      let buf = buffer;
+      for (const line of lines) {
+        appendEntries([{ kind: 'input', prompt: promptFor(buf.length > 0), text: line }]);
+        const r = processLine(buf, line);
+        buf = r.buffer;
+        setBuffer(buf);
+        if (r.submit !== null) await submit(r.submit);
+      }
+    } finally {
+      processingRef.current = false;
     }
   };
 
@@ -697,10 +832,12 @@ export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
     }
   };
 
-  const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
+  const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    const el = e.currentTarget;
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+      // Enter runs; Shift+Enter inserts a newline (IME composition is left alone).
       e.preventDefault();
-      handleEnter();
+      void handleEnter();
     } else if (e.key === 'Tab' && !e.shiftKey) {
       // Tab: simple completion. Shift+Tab keeps the browser default (leave the
       // terminal via keyboard).
@@ -709,10 +846,11 @@ export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
     } else if (e.key === 'c' && e.ctrlKey) {
       e.preventDefault();
       handleCtrlC();
-    } else if (e.key === 'ArrowUp') {
+    } else if (e.key === 'ArrowUp' && !el.value.slice(0, el.selectionStart).includes('\n')) {
+      // History only from the first line; otherwise move the caret normally.
       e.preventDefault();
       navHistory(1);
-    } else if (e.key === 'ArrowDown') {
+    } else if (e.key === 'ArrowDown' && !el.value.slice(el.selectionEnd).includes('\n')) {
       e.preventDefault();
       navHistory(-1);
     }
@@ -722,7 +860,7 @@ export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
     <div className="space-y-2">
       {/* Thin amber note. */}
       <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-700 dark:text-amber-300">
-        Runs against a disposable sandbox. \? for help, statements end with ;
+        Runs against a disposable sandbox. \? for help, statements end with ; (Shift+Enter for a new line)
       </div>
 
       {/* Dark terminal panel. */}
@@ -779,13 +917,14 @@ export function SqlConsole({ dumpId, database }: SqlConsoleProps) {
               {promptFor(buffer.length > 0)}
             </span>
           )}
-          <input
+          <textarea
             ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={onKeyDown}
             disabled={running}
-            className="flex-1 border-none bg-transparent font-mono text-slate-100 outline-none"
+            rows={Math.min(Math.max(input.split('\n').length, 1), 15)}
+            className="flex-1 resize-none overflow-y-auto whitespace-pre border-none bg-transparent p-0 font-mono text-slate-100 outline-none"
             autoFocus
             spellCheck={false}
             aria-label="Terminal input"

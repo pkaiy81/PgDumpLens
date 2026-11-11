@@ -9,16 +9,22 @@ mod state;
 use std::net::SocketAddr;
 use std::time::Duration;
 use tracing::info;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, Layer};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing
+    // Initialize tracing. Filters are per-layer so the console's notice
+    // capture sees sqlx notice events regardless of RUST_LOG.
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::new(
-            std::env::var("RUST_LOG").unwrap_or_else(|_| "info,db_viewer_api=debug".into()),
-        ))
-        .with(tracing_subscriber::fmt::layer())
+        .with(
+            tracing_subscriber::fmt::layer().with_filter(tracing_subscriber::EnvFilter::new(
+                std::env::var("RUST_LOG").unwrap_or_else(|_| "info,db_viewer_api=debug".into()),
+            )),
+        )
+        .with(
+            handlers::console::notice::NoticeCaptureLayer
+                .with_filter(handlers::console::notice::NoticeCaptureLayer::filter()),
+        )
         .init();
 
     // Load configuration
