@@ -6,6 +6,8 @@ import {
   tableToTsv,
   tableToJson,
   completeWord,
+  splitCompleteInput,
+  processLine,
   copyTextToClipboard,
   SQL_KEYWORDS,
 } from './SqlConsole';
@@ -68,7 +70,7 @@ function tableBlock() {
 }
 
 function terminalInput() {
-  return screen.getByLabelText('Terminal input') as HTMLInputElement;
+  return screen.getByLabelText('Terminal input') as HTMLTextAreaElement;
 }
 
 function enter(value: string) {
@@ -171,6 +173,74 @@ describe('SqlConsole', () => {
     await waitFor(() => expect(executePosts()).toHaveLength(1));
     const body = JSON.parse(executePosts()[0][1].body);
     expect(body.input).toBe('SELECT *\nFROM t;');
+  });
+
+  it('keeps buffering a function body until the dollar quote closes', async () => {
+    enqueue(sessionResponse(), executeResponse([{ type: 'text', text: 'CREATE FUNCTION' }]));
+
+    render(<SqlConsole dumpId="123" />);
+    await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
+
+    enter('CREATE FUNCTION f() RETURNS int AS $$');
+    enter('BEGIN');
+    enter('  RETURN 1;');
+    enter('END;');
+    expect(executePosts()).toHaveLength(0);
+    enter('$$ LANGUAGE plpgsql;');
+
+    await waitFor(() => expect(executePosts()).toHaveLength(1));
+    expect(JSON.parse(executePosts()[0][1].body).input).toBe(
+      'CREATE FUNCTION f() RETURNS int AS $$\nBEGIN\n  RETURN 1;\nEND;\n$$ LANGUAGE plpgsql;'
+    );
+  });
+
+  it('runs pasted multi-line text line by line, keeping newlines', async () => {
+    enqueue(
+      sessionResponse(),
+      executeResponse([{ type: 'text', text: 'first' }]),
+      executeResponse([{ type: 'text', text: 'second' }])
+    );
+
+    render(<SqlConsole dumpId="123" />);
+    await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
+
+    // A pasted block: a line comment must not swallow the following lines.
+    enter('SELECT id -- the key\nFROM t;\n\\dt\nSELECT 2');
+    await waitFor(() => expect(executePosts()).toHaveLength(2));
+    expect(JSON.parse(executePosts()[0][1].body).input).toBe('SELECT id -- the key\nFROM t;');
+    expect(JSON.parse(executePosts()[1][1].body).input).toBe('\\dt');
+    // Each line is echoed; the unterminated last statement stays buffered.
+    expect(screen.getByText('SELECT id -- the key')).toBeInTheDocument();
+    await waitFor(() => expect(screen.getAllByText('mydb-#').length).toBeGreaterThan(0));
+
+    enqueue(executeResponse([{ type: 'text', text: 'third' }]));
+    enter(';');
+    await waitFor(() => expect(executePosts()).toHaveLength(3));
+    expect(JSON.parse(executePosts()[2][1].body).input).toBe('SELECT 2\n;');
+  });
+
+  it('inserts a newline with Shift+Enter instead of running', async () => {
+    enqueue(sessionResponse());
+
+    render(<SqlConsole dumpId="123" />);
+    await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
+
+    const el = terminalInput();
+    fireEvent.change(el, { target: { value: 'SELECT 1;' } });
+    fireEvent.keyDown(el, { key: 'Enter', shiftKey: true });
+    expect(executePosts()).toHaveLength(0);
+    expect(el.value).toBe('SELECT 1;');
+  });
+
+  it('sends several statements on one line together', async () => {
+    enqueue(sessionResponse(), executeResponse([{ type: 'text', text: 'ok' }]));
+
+    render(<SqlConsole dumpId="123" />);
+    await waitFor(() => expect(screen.getByText('mydb=#')).toBeInTheDocument());
+
+    enter('SELECT 1; SELECT 2;');
+    await waitFor(() => expect(executePosts()).toHaveLength(1));
+    expect(JSON.parse(executePosts()[0][1].body).input).toBe('SELECT 1; SELECT 2;');
   });
 
   it('does nothing on an empty line with an empty buffer', async () => {
@@ -584,5 +654,64 @@ describe('table serializers', () => {
       { id: '2', note: null },
       { id: '3', note: 'has "quote"' },
     ]);
+  });
+});
+
+describe('splitCompleteInput', () => {
+  it('returns null until a top-level semicolon appears', () => {
+    expect(splitCompleteInput('SELECT 1')).toEqual({ complete: null, rest: 'SELECT 1' });
+    expect(splitCompleteInput('SELECT 1;')).toEqual({ complete: 'SELECT 1;', rest: '' });
+  });
+
+  it('ignores semicolons inside strings, identifiers and comments', () => {
+    expect(splitCompleteInput("SELECT 'a;").complete).toBeNull();
+    expect(splitCompleteInput("SELECT 'a;'").complete).toBeNull();
+    expect(splitCompleteInput("SELECT 'it''s;';").complete).toBe("SELECT 'it''s;';");
+    expect(splitCompleteInput("SELECT E'\\';").complete).toBeNull();
+    expect(splitCompleteInput('SELECT 1 AS "x;"').complete).toBeNull();
+    expect(splitCompleteInput('SELECT 1 -- x;').complete).toBeNull();
+    expect(splitCompleteInput('SELECT /* x; */ 1').complete).toBeNull();
+  });
+
+  it('ignores semicolons inside dollar quotes and parentheses', () => {
+    expect(splitCompleteInput('DO $$ BEGIN PERFORM 1;').complete).toBeNull();
+    expect(splitCompleteInput('DO $$ BEGIN PERFORM 1; END $$;').complete).toBe(
+      'DO $$ BEGIN PERFORM 1; END $$;'
+    );
+    expect(splitCompleteInput('DO $x$ BEGIN; $$ ; $x$;').complete).toBe('DO $x$ BEGIN; $$ ; $x$;');
+    expect(splitCompleteInput('CREATE RULE r AS ON INSERT TO t DO ALSO (SELECT 1;').complete).toBeNull();
+  });
+
+  it('treats $1 and $ inside identifiers as plain text', () => {
+    expect(splitCompleteInput('SELECT $1;').complete).toBe('SELECT $1;');
+    expect(splitCompleteInput('SELECT a$b$;').complete).toBe('SELECT a$b$;');
+  });
+
+  it('keeps text after the last semicolon buffered', () => {
+    expect(splitCompleteInput('SELECT 1; SELECT 2')).toEqual({
+      complete: 'SELECT 1;',
+      rest: 'SELECT 2',
+    });
+    expect(splitCompleteInput('SELECT 1; -- note')).toEqual({ complete: 'SELECT 1;', rest: '' });
+  });
+});
+
+describe('processLine', () => {
+  it('buffers until a statement completes', () => {
+    expect(processLine([], 'SELECT 1')).toEqual({ buffer: ['SELECT 1'], submit: null });
+    expect(processLine(['SELECT 1'], 'FROM t;')).toEqual({ buffer: [], submit: 'SELECT 1\nFROM t;' });
+  });
+
+  it('runs meta-commands immediately without touching the buffer', () => {
+    expect(processLine(['SELECT 1'], '  \\dt ')).toEqual({ buffer: ['SELECT 1'], submit: '\\dt' });
+  });
+
+  it('ignores an empty line with an empty buffer but keeps it mid-statement', () => {
+    expect(processLine([], '  ')).toEqual({ buffer: [], submit: null });
+    expect(processLine(['SELECT 1'], '')).toEqual({ buffer: ['SELECT 1', ''], submit: null });
+  });
+
+  it('keeps the remainder after the last semicolon', () => {
+    expect(processLine([], 'SELECT 1; SELECT')).toEqual({ buffer: ['SELECT'], submit: 'SELECT 1;' });
   });
 });
